@@ -1,0 +1,16 @@
+﻿version: "3.9"
+
+services:
+  netsentinel:
+    build: .
+    container_name: netsentinel
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      TZ: Asia/Shanghai
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASS: ${ADMIN_PASS}
+      FEISHU_WEBHOOK: ${FEISHU_WEBHOOK}
+    restart: unless-stopped

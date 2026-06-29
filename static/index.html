@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NetSentinel Pro</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    body { background: #050505; color: #e5e7eb; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .bg-grid { background-image: linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px); background-size: 28px 28px; }
+    .offline-blink { animation: offlinePulse 1.2s ease-in-out infinite; }
+    @keyframes offlinePulse { 0% { box-shadow:0 0 0 0 rgba(239,68,68,.35);} 50% {box-shadow:0 0 18px 3px rgba(239,68,68,.85);} 100% {box-shadow:0 0 0 0 rgba(239,68,68,.35);} }
+  </style>
+</head>
+<body class="min-h-screen bg-grid">
+  <div id="app" class="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
+    <div v-if="toast.show" class="fixed right-4 top-4 z-[100] rounded-md border px-4 py-2 text-xs shadow-lg" :class="toast.type === 'success' ? 'border-emerald-500 bg-emerald-950 text-emerald-200' : 'border-red-500 bg-red-950 text-red-200'">{{ toast.message }}</div>
+
+    <header class="mb-4 rounded-lg border border-zinc-800 bg-black/85 p-4">
+      <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h1 class="text-xl font-semibold text-zinc-100">NetSentinel Pro 实时监控大屏</h1>
+          <p class="mt-1 text-xs text-zinc-400">在线、离线、未知均按明确规则判定；看板每 10 秒自动刷新。</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button v-if="adminToken" class="rounded-md border border-sky-500 px-3 py-2 text-xs text-sky-300 hover:bg-sky-950/30" @click="openAssetModalForCreate">添加设备</button>
+          <button v-if="adminToken" class="rounded-md border border-amber-500 px-3 py-2 text-xs text-amber-300 hover:bg-amber-950/30 disabled:cursor-not-allowed disabled:opacity-60" :disabled="isTriggering" @click="triggerMonitorNow">{{ isTriggering ? '探测中...' : '立即探测' }}</button>
+          <button class="rounded-md border px-3 py-2 text-xs" :class="adminToken ? 'border-cyan-500 text-cyan-300 hover:bg-cyan-950/40' : 'border-zinc-700 text-zinc-400'" @click="openSettings">系统设置</button>
+          <button v-if="adminToken" class="rounded-md border border-zinc-700 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-900" @click="logoutAdmin">退出</button>
+        </div>
+      </div>
+
+      <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-4">
+        <div class="rounded-lg border border-zinc-700 bg-zinc-950/90 p-3"><p class="text-[11px] text-zinc-400">总设备数</p><p class="mt-1 text-2xl font-bold text-zinc-100">{{ totalCount }}</p></div>
+        <div class="rounded-lg border border-emerald-900 bg-emerald-950/40 p-3"><p class="text-[11px] text-emerald-400">在线数</p><p class="mt-1 text-2xl font-bold text-emerald-300">{{ onlineCount }}</p></div>
+        <div class="rounded-lg border border-red-800 bg-red-950/50 p-3"><p class="text-[11px] text-red-300">离线数</p><p class="mt-1 text-2xl font-bold text-red-300">{{ offlineCount }}</p></div>
+        <div class="rounded-lg border border-zinc-700 bg-zinc-950/90 p-3"><p class="text-[11px] text-zinc-400">未知数</p><p class="mt-1 text-2xl font-bold text-zinc-300">{{ unknownCount }}</p></div>
+      </div>
+    </header>
+
+    <section class="mb-3 rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+      <div class="grid gap-2 text-xs text-zinc-300 md:grid-cols-3">
+        <p><span class="font-semibold text-emerald-300">在线</span>：首次探测成功会立即确认在线；设备离线后恢复需满足恢复阈值。</p>
+        <p><span class="font-semibold text-red-300">离线</span>：连续探测失败次数达到掉线阈值后确认离线。</p>
+        <p><span class="font-semibold text-zinc-100">未知</span>：刚添加且尚未探测完成，或失败次数未达到掉线阈值。</p>
+      </div>
+    </section>
+
+    <section class="mb-3 flex flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 p-2 md:flex-row md:items-center md:justify-between">
+      <div class="flex items-center gap-2 overflow-x-auto">
+        <button class="rounded-full border px-3 py-1 text-xs" :class="selectedGroup === '__ALL__' ? 'border-cyan-500 bg-cyan-900/40 text-cyan-200' : 'border-zinc-700 text-zinc-300'" @click="selectedGroup='__ALL__'">全部</button>
+        <button v-for="g in groups" :key="g" class="rounded-full border px-3 py-1 text-xs" :class="selectedGroup === g ? 'border-cyan-500 bg-cyan-900/40 text-cyan-200' : 'border-zinc-700 text-zinc-300'" @click="selectedGroup=g">{{ g }}</button>
+      </div>
+      <div class="flex gap-2">
+        <input v-model="keyword" class="w-48 rounded border border-zinc-700 bg-black px-3 py-1.5 text-xs text-zinc-100" placeholder="搜索名称或 IP" />
+        <button v-if="adminToken && selectedGroup !== '__ALL__'" class="rounded border border-zinc-600 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" @click="renameCurrentGroup">重命名分组</button>
+      </div>
+    </section>
+
+    <main>
+      <div v-if="error" class="mb-3 rounded-md border border-red-700 bg-red-950/70 px-4 py-2 text-xs text-red-200">{{ error }}</div>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        <article v-for="device in filteredDevices" :key="device.id" :class="cardClass(device)" class="rounded-lg border p-3 transition">
+          <div class="mb-1 flex items-start justify-between gap-1">
+            <h2 class="truncate text-sm font-semibold text-zinc-100" :title="device.name">{{ device.name }}</h2>
+            <div class="flex shrink-0 items-center gap-1">
+              <span class="rounded px-1.5 py-0.5 text-[10px] font-bold" :class="statusBadgeClass(device.latest_status)">{{ statusText(device.latest_status) }}</span>
+              <template v-if="adminToken">
+                <button class="rounded border border-zinc-600 px-1.5 py-0.5 text-[10px] hover:bg-zinc-800" @click="toggleMonitoring(device)" :title="device.is_monitoring ? '暂停监控' : '恢复监控'">⏯</button>
+                <button class="rounded border border-zinc-600 px-1.5 py-0.5 text-[10px] hover:bg-zinc-800" @click="openAssetModalForEdit(device)" title="编辑">✎</button>
+                <button class="rounded border border-zinc-600 px-1.5 py-0.5 text-[10px] hover:bg-zinc-800" @click="deleteDevice(device)" title="删除">×</button>
+              </template>
+            </div>
+          </div>
+          <p class="text-xs text-zinc-300">IP: <span class="font-mono text-zinc-100">{{ device.ip_address }}</span></p>
+          <p class="text-xs text-zinc-400">分组: {{ device.group_name }}</p>
+          <p class="text-xs text-zinc-400">监控: {{ device.is_monitoring ? '开启' : '暂停' }}</p>
+          <p class="mt-1 text-[11px] text-zinc-500">{{ formatTime(device.latest_event_time) }}</p>
+          <p class="mt-2 line-clamp-3 text-[11px] leading-4 text-zinc-400" :title="device.status_description">{{ device.status_description }}</p>
+        </article>
+      </div>
+    </main>
+
+    <div v-if="showAuthModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div class="w-full max-w-md rounded-lg border border-zinc-700 bg-zinc-950 p-5">
+        <h3 class="text-lg font-semibold text-zinc-100">管理员验证</h3>
+        <p class="mt-1 text-sm text-zinc-400">请输入后台环境变量配置的管理员账号和密码。</p>
+        <div class="mt-4 space-y-3">
+          <input v-model="adminUser" class="w-full rounded border border-zinc-700 bg-black px-3 py-2 text-sm" placeholder="管理员账号" />
+          <input v-model="adminPass" type="password" class="w-full rounded border border-zinc-700 bg-black px-3 py-2 text-sm" placeholder="管理员密码" />
+        </div>
+        <p v-if="authError" class="mt-3 text-sm text-red-400">{{ authError }}</p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button class="rounded border border-zinc-700 px-3 py-2 text-sm" @click="skipAuth">稍后再说</button>
+          <button class="rounded border border-cyan-500 px-3 py-2 text-sm text-cyan-300" @click="loginAdmin">登录</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showSettingsModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div class="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-950 p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="text-lg font-semibold text-zinc-100">系统设置</h3>
+          <button class="text-zinc-400 hover:text-zinc-100" @click="showSettingsModal=false">关闭</button>
+        </div>
+        <div class="mt-4 flex gap-2 border-b border-zinc-800 pb-3">
+          <button class="rounded px-3 py-2 text-sm" :class="settingsTab==='monitor' ? 'bg-cyan-900/50 text-cyan-200' : 'text-zinc-400'" @click="settingsTab='monitor'">监控参数</button>
+          <button class="rounded px-3 py-2 text-sm" :class="settingsTab==='dr' ? 'bg-cyan-900/50 text-cyan-200' : 'text-zinc-400'" @click="settingsTab='dr'">数据与灾备</button>
+          <button class="rounded px-3 py-2 text-sm" :class="settingsTab==='logs' ? 'bg-cyan-900/50 text-cyan-200' : 'text-zinc-400'" @click="openLogsTab">系统日志</button>
+        </div>
+
+        <div v-if="settingsTab==='monitor'" class="mt-4 space-y-3">
+          <label class="block text-sm text-zinc-300">轮询间隔(秒)<input v-model.number="settings.ping_interval" type="number" min="1" class="mt-1 w-full rounded border border-zinc-700 bg-black px-3 py-2 text-sm" /></label>
+          <label class="block text-sm text-zinc-300">掉线阈值(次)<input v-model.number="settings.offline_threshold" type="number" min="1" class="mt-1 w-full rounded border border-zinc-700 bg-black px-3 py-2 text-sm" /></label>
+          <label class="block text-sm text-zinc-300">恢复阈值(次)<input v-model.number="settings.online_threshold" type="number" min="1" class="mt-1 w-full rounded border border-zinc-700 bg-black px-3 py-2 text-sm" /></label>
+          <label class="block text-sm text-zinc-300">飞书 Webhook<input v-model="settings.feishu_webhook" class="mt-1 w-full rounded border border-zinc-700 bg-black px-3 py-2 text-sm" placeholder="https://open.feishu.cn/..." /></label>
+          <div class="flex justify-end"><button class="rounded border border-emerald-500 px-4 py-2 text-sm text-emerald-300" @click="saveSettings">保存设置</button></div>
+        </div>
+
+        <div v-else-if="settingsTab==='dr'" class="mt-4 space-y-5">
+          <button class="rounded border border-cyan-500 px-4 py-2 text-sm text-cyan-300" @click="downloadBackup">下载数据库备份</button>
+          <div class="space-y-2">
+            <label class="block text-sm text-zinc-300">恢复数据库 (.db)</label>
+            <input type="file" accept=".db" @change="onRestoreFileChange" class="block w-full text-sm text-zinc-300" />
+            <button class="rounded border border-red-500 px-4 py-2 text-sm text-red-300" @click="restoreBackup">上传并覆盖恢复</button>
+          </div>
+        </div>
+
+        <div v-else class="mt-4">
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <select v-model="logLevel" class="rounded border border-zinc-700 bg-black px-3 py-2 text-sm text-zinc-100">
+              <option value="">全部级别</option><option>INFO</option><option>WARNING</option><option>ERROR</option>
+            </select>
+            <input v-model="logCategory" class="rounded border border-zinc-700 bg-black px-3 py-2 text-sm text-zinc-100" placeholder="类别，如 monitor" />
+            <button class="rounded border border-cyan-500 px-4 py-2 text-sm text-cyan-300" @click="fetchLogs">刷新日志</button>
+          </div>
+          <div class="overflow-hidden rounded border border-zinc-800">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-zinc-900 text-zinc-400"><tr><th class="p-2">时间</th><th class="p-2">级别</th><th class="p-2">类别</th><th class="p-2">内容</th></tr></thead>
+              <tbody>
+                <tr v-for="log in logs" :key="log.id" class="border-t border-zinc-800">
+                  <td class="whitespace-nowrap p-2 text-zinc-400">{{ formatTime(log.created_at) }}</td>
+                  <td class="p-2" :class="log.level==='ERROR'?'text-red-300':(log.level==='WARNING'?'text-amber-300':'text-zinc-300')">{{ log.level }}</td>
+                  <td class="p-2 text-cyan-300">{{ log.category }}</td>
+                  <td class="p-2 text-zinc-200">{{ log.message }}</td>
+                </tr>
+                <tr v-if="!logs.length"><td colspan="4" class="p-4 text-center text-zinc-500">暂无日志</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <p v-if="settingsMsg" class="mt-4 text-sm text-emerald-300">{{ settingsMsg }}</p>
+        <p v-if="settingsErr" class="mt-2 text-sm text-red-400">{{ settingsErr }}</p>
+      </div>
+    </div>
+
+    <div v-if="showAssetModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div class="w-full max-w-3xl rounded-lg border border-zinc-700 bg-zinc-950 p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="text-lg font-semibold text-zinc-100">资产管理</h3>
+          <button class="text-zinc-400 hover:text-zinc-100" @click="showAssetModal=false">关闭</button>
+        </div>
+        <div class="mt-4 flex gap-2 border-b border-zinc-800 pb-3">
+          <button class="rounded px-3 py-2 text-sm" :class="assetTab==='single' ? 'bg-sky-900/50 text-sky-200' : 'text-zinc-400'" @click="assetTab='single'">单个添加</button>
+          <button class="rounded px-3 py-2 text-sm" :class="assetTab==='bulk' ? 'bg-sky-900/50 text-sky-200' : 'text-zinc-400'" @click="assetTab='bulk'">批量导入</button>
+        </div>
+        <div v-if="assetTab==='single'" class="mt-4 space-y-3">
+          <label class="block text-sm text-zinc-300">设备名称<input v-model="assetForm.name" class="mt-1 w-full rounded border border-zinc-700 bg-black px-3 py-2 text-sm" /></label>
+          <label class="block text-sm text-zinc-300">IP地址或主机名<input v-model="assetForm.ip_address" class="mt-1 w-full rounded border border-zinc-700 bg-black px-3 py-2 text-sm" /></label>
+          <label class="block text-sm text-zinc-300">所属分组<input v-model="assetForm.group_name" class="mt-1 w-full rounded border border-zinc-700 bg-black px-3 py-2 text-sm" /></label>
+          <label class="flex items-center gap-2 text-sm text-zinc-300"><input v-model="assetForm.is_monitoring" type="checkbox" class="h-4 w-4" />是否监控</label>
+          <div class="flex justify-end"><button class="rounded border border-emerald-500 px-4 py-2 text-sm text-emerald-300" @click="saveSingleAsset">{{ assetForm.id ? '保存修改' : '新增设备' }}</button></div>
+        </div>
+        <div v-else class="mt-4 space-y-3">
+          <p class="text-sm text-zinc-400">每行一个：设备名,IP或主机名,分组</p>
+          <textarea v-model="bulkText" rows="10" class="w-full rounded border border-zinc-700 bg-black px-3 py-2 text-sm"></textarea>
+          <div class="flex justify-end"><button class="rounded border border-sky-500 px-4 py-2 text-sm text-sky-300" @click="submitBulkImport">提交批量导入</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const { createApp, ref, computed, onMounted, onBeforeUnmount } = Vue;
+createApp({
+setup() {
+const devices = ref([]); const error = ref(''); const adminToken = ref(localStorage.getItem('admin_token') || '');
+const showAuthModal = ref(!adminToken.value); const showSettingsModal = ref(false); const settingsTab = ref('monitor');
+const settings = ref({ ping_interval: 30, offline_threshold: 3, online_threshold: 2, feishu_webhook: '' });
+const settingsMsg = ref(''); const settingsErr = ref(''); const authError = ref(''); const adminUser = ref(''); const adminPass = ref('');
+const restoreFile = ref(null); const isTriggering = ref(false); const showAssetModal = ref(false); const assetTab = ref('single');
+const bulkText = ref(''); const assetForm = ref({ id:null, name:'', ip_address:'', group_name:'default', is_monitoring:true });
+const toast = ref({ show:false, type:'success', message:'' }); const selectedGroup = ref('__ALL__'); const keyword = ref('');
+const logs = ref([]); const logLevel = ref(''); const logCategory = ref(''); let timer = null;
+const showToast=(message,type='success')=>{toast.value={show:true,type,message};setTimeout(()=>toast.value.show=false,2500)};
+const authHeaders=()=>({Authorization:`Bearer ${adminToken.value}`});
+const apiJson=async(url,options={})=>{const r=await fetch(url,options);const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.detail||`请求失败: ${r.status}`);return b;};
+const fetchDevices=async()=>{try{const r=await fetch('/api/devices',{cache:'no-store'});if(!r.ok)throw new Error(`请求失败: ${r.status}`);devices.value=await r.json();error.value='';}catch(e){error.value=`加载设备失败: ${e.message}`;}};
+const fetchSettings=async()=>{settingsErr.value='';settingsMsg.value='';settings.value=await apiJson('/api/settings',{headers:authHeaders()});};
+const loginAdmin=async()=>{authError.value='';if(!adminUser.value||!adminPass.value){authError.value='请输入完整管理员账号和密码';return;}try{const b=await apiJson('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:adminUser.value,password:adminPass.value})});adminToken.value=b.access_token;localStorage.setItem('admin_token',b.access_token);showAuthModal.value=false;showToast('管理员登录成功');}catch(e){authError.value=e.message;}};
+const logoutAdmin=()=>{adminToken.value='';localStorage.removeItem('admin_token');showAuthModal.value=true;showToast('已退出管理员模式');};
+const skipAuth=()=>{showAuthModal.value=false;};
+const openSettings=async()=>{if(!adminToken.value){showAuthModal.value=true;return;}try{await fetchSettings();showSettingsModal.value=true;}catch(e){settingsErr.value=e.message;showSettingsModal.value=true;}};
+const triggerMonitorNow=async()=>{if(!adminToken.value||isTriggering.value)return;isTriggering.value=true;try{await apiJson('/api/trigger-monitor',{method:'POST',headers:authHeaders()});showToast('已触发一次手动探测');await new Promise(x=>setTimeout(x,1800));await fetchDevices();}catch(e){showToast(e.message,'error');}finally{isTriggering.value=false;}};
+const openAssetModalForCreate=()=>{assetTab.value='single';assetForm.value={id:null,name:'',ip_address:'',group_name:'default',is_monitoring:true};showAssetModal.value=true;};
+const openAssetModalForEdit=(d)=>{assetTab.value='single';assetForm.value={id:d.id,name:d.name,ip_address:d.ip_address,group_name:d.group_name||'default',is_monitoring:!!d.is_monitoring};showAssetModal.value=true;};
+const saveSingleAsset=async()=>{if(!adminToken.value)return;const p={name:assetForm.value.name.trim(),ip_address:assetForm.value.ip_address.trim(),group_name:(assetForm.value.group_name||'default').trim()||'default',is_monitoring:!!assetForm.value.is_monitoring};if(!p.name||!p.ip_address){showToast('设备名称和IP地址不能为空','error');return;}try{if(assetForm.value.id){await apiJson(`/api/devices/${assetForm.value.id}`,{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(p)});}else{await apiJson('/api/devices',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(p)});}await fetchDevices();showAssetModal.value=false;showToast(assetForm.value.id?'设备修改成功':'设备新增成功');}catch(e){showToast(e.message,'error');}};
+const submitBulkImport=async()=>{if(!adminToken.value)return;const lines=bulkText.value.split('\n').map(s=>s.trim()).filter(Boolean);if(!lines.length){showToast('请先输入批量设备内容','error');return;}const arr=[];for(const line of lines){const p=line.split(',').map(x=>x.trim());if(p.length<2||!p[0]||!p[1]){showToast(`格式错误: ${line}`,'error');return;}arr.push({name:p[0],ip_address:p[1],group_name:p[2]||'default',is_monitoring:true});}try{const b=await apiJson('/api/devices/bulk',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({devices:arr})});await fetchDevices();bulkText.value='';showToast(`导入完成: 新增 ${b.imported}，跳过 ${b.skipped}`);}catch(e){showToast(e.message,'error');}};
+const deleteDevice=async(d)=>{if(!adminToken.value)return; if(!confirm(`确认删除设备 ${d.name} (${d.ip_address}) 吗？`))return; try{await apiJson(`/api/devices/${d.id}`,{method:'DELETE',headers:authHeaders()});await fetchDevices();showToast('设备删除成功');}catch(e){showToast(e.message,'error');}};
+const toggleMonitoring=async(d)=>{if(!adminToken.value)return;try{await apiJson(`/api/devices/${d.id}`,{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({is_monitoring:!d.is_monitoring})});await fetchDevices();showToast(!d.is_monitoring?'已恢复监控':'已暂停监控');}catch(e){showToast(e.message,'error');}};
+const renameCurrentGroup=async()=>{if(!adminToken.value||selectedGroup.value==='__ALL__')return;const oldName=selectedGroup.value;const newName=prompt(`将分组“${oldName}”重命名为：`,oldName);if(!newName||!newName.trim()||newName.trim()===oldName)return;try{const b=await apiJson('/api/groups/rename',{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({old_name:oldName,new_name:newName.trim()})});selectedGroup.value=newName.trim();await fetchDevices();showToast(`已更新 ${b.updated_count} 台设备分组`);}catch(e){showToast(e.message,'error');}};
+const saveSettings=async()=>{settingsErr.value='';settingsMsg.value='';try{settings.value=await apiJson('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(settings.value)});settingsMsg.value='设置保存成功';showToast('系统设置已保存');}catch(e){settingsErr.value=e.message;showToast(e.message,'error');}};
+const downloadBackup=async()=>{try{const r=await fetch('/api/backup',{headers:authHeaders()});if(!r.ok)throw new Error('备份下载失败');const blob=await r.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='monitor.db';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);showToast('数据库备份下载成功');}catch(e){showToast(e.message,'error');}};
+const onRestoreFileChange=(e)=>{restoreFile.value=e.target.files[0]||null;};
+const restoreBackup=async()=>{if(!restoreFile.value){settingsErr.value='请先选择 .db 文件';return;}const fd=new FormData();fd.append('file',restoreFile.value);try{const b=await apiJson('/api/restore',{method:'POST',headers:authHeaders(),body:fd});settingsMsg.value=b.message||'恢复成功';showToast(b.message||'恢复成功');}catch(e){settingsErr.value=e.message;showToast(e.message,'error');}};
+const fetchLogs=async()=>{const params=new URLSearchParams();if(logLevel.value)params.set('level',logLevel.value);if(logCategory.value.trim())params.set('category',logCategory.value.trim());logs.value=await apiJson(`/api/logs?${params.toString()}`,{headers:authHeaders()});};
+const openLogsTab=async()=>{settingsTab.value='logs';try{await fetchLogs();}catch(e){showToast(e.message,'error');}};
+const groups=computed(()=>Array.from(new Set(devices.value.map(d=>d.group_name||'default'))));
+const filteredDevices=computed(()=>{const kw=keyword.value.trim().toLowerCase();let base=selectedGroup.value==='__ALL__'?devices.value:devices.value.filter(d=>(d.group_name||'default')===selectedGroup.value);if(kw)base=base.filter(d=>`${d.name} ${d.ip_address}`.toLowerCase().includes(kw));return [...base].sort((a,b)=>{const order={OFFLINE:0,UNKNOWN:1,ONLINE:2};const ao=order[a.latest_status]??3;const bo=order[b.latest_status]??3;if(ao!==bo)return ao-bo;return a.id-b.id;});});
+const totalCount=computed(()=>devices.value.length); const onlineCount=computed(()=>devices.value.filter(d=>d.latest_status==='ONLINE').length); const offlineCount=computed(()=>devices.value.filter(d=>d.latest_status==='OFFLINE').length); const unknownCount=computed(()=>devices.value.filter(d=>d.latest_status==='UNKNOWN').length);
+const statusText=(s)=>s==='ONLINE'?'在线':(s==='OFFLINE'?'离线':'未知');
+const statusBadgeClass=(s)=>s==='ONLINE'?'bg-emerald-100 text-emerald-700':(s==='OFFLINE'?'bg-red-100 text-red-700':'bg-zinc-200 text-zinc-700');
+const formatTime=(value)=>{if(!value)return '暂无';const normalized=value.endsWith('Z')?value:(value+'Z');const date=new Date(normalized);if(Number.isNaN(date.getTime()))return value;return date.toLocaleString();};
+const cardClass=(d)=>{if(!d.is_monitoring)return 'bg-zinc-900/60 border-zinc-700 opacity-60 grayscale'; if(d.latest_status==='OFFLINE')return 'bg-red-700/85 border-red-300 text-white offline-blink'; if(d.latest_status==='ONLINE')return 'bg-zinc-900/80 border-emerald-900'; return 'bg-zinc-900/80 border-zinc-600';};
+onMounted(async()=>{await fetchDevices();timer=setInterval(fetchDevices,10000);});
+onBeforeUnmount(()=>{if(timer)clearInterval(timer);});
+return {devices,error,adminToken,showAuthModal,showSettingsModal,settingsTab,settings,settingsMsg,settingsErr,authError,adminUser,adminPass,restoreFile,isTriggering,showAssetModal,assetTab,bulkText,assetForm,toast,selectedGroup,keyword,logs,logLevel,logCategory,groups,filteredDevices,totalCount,onlineCount,offlineCount,unknownCount,statusText,statusBadgeClass,formatTime,cardClass,loginAdmin,logoutAdmin,skipAuth,openSettings,triggerMonitorNow,openAssetModalForCreate,openAssetModalForEdit,saveSingleAsset,submitBulkImport,deleteDevice,toggleMonitoring,renameCurrentGroup,saveSettings,downloadBackup,onRestoreFileChange,restoreBackup,fetchLogs,openLogsTab};
+}
+}).mount('#app');
+</script>
+</body>
+</html>
