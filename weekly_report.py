@@ -85,7 +85,7 @@ async def run_weekly_report_and_cleanup() -> None:
         },
     }
 
-    sent = await send_feishu_payload(payload)
+    sent = await send_feishu_payload(payload, bypass_silence=True)
     log_event(
         category="report",
         message="每周稳定性周报已生成并发送" if sent else "每周稳定性周报已生成但发送失败或未配置 Webhook",

@@ -8,6 +8,7 @@ from models import SystemLog
 
 
 logger = logging.getLogger("netsentinel")
+MAX_LOG_DETAILS_CHARS = 100_000
 
 
 def configure_logging() -> None:
@@ -35,7 +36,7 @@ def log_event(
                     category=category[:50],
                     message=message[:500],
                     device_id=device_id,
-                    details=details[:2000],
+                    details=details[:MAX_LOG_DETAILS_CHARS],
                     created_at=datetime.now(timezone.utc),
                 )
             )
