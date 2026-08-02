@@ -96,10 +96,16 @@ def main() -> int:
                     "silence_enabled": True,
                     "silence_start": "22:00",
                     "silence_end": "07:30",
+                    "weekly_report_enabled": True,
+                    "weekly_report_day_of_week": "mon",
+                    "weekly_report_time": "09:15",
+                    "weekly_report_timezone": "Asia/Shanghai",
                 },
             )
             assert settings.status_code == 200, settings.text
             assert settings.json()["silence_enabled"] is True
+            assert settings.json()["weekly_report_day_of_week"] == "mon"
+            assert settings.json()["weekly_report_time"] == "09:15"
 
             policy = client.put(
                 "/api/group-policies/self-check",

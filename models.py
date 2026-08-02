@@ -92,6 +92,10 @@ class SystemSetting(Base):
     silence_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     silence_start: Mapped[str] = mapped_column(String(5), nullable=False, default="")
     silence_end: Mapped[str] = mapped_column(String(5), nullable=False, default="")
+    weekly_report_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    weekly_report_day_of_week: Mapped[str] = mapped_column(String(3), nullable=False, default="fri")
+    weekly_report_time: Mapped[str] = mapped_column(String(5), nullable=False, default="17:00")
+    weekly_report_timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Shanghai")
 
 
 class GroupPolicy(Base):

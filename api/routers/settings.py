@@ -1,6 +1,7 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 
@@ -8,8 +9,10 @@ from api.dependencies import verify_admin_token
 from database import SessionLocal
 from logging_service import log_event
 from models import SystemSetting
+from services.report_scheduler import schedule_weekly_report_job
 
 router = APIRouter(prefix="/api", tags=["Settings"])
+VALID_WEEKDAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 
 
 class SettingOut(BaseModel):
@@ -21,6 +24,10 @@ class SettingOut(BaseModel):
     silence_enabled: bool
     silence_start: str
     silence_end: str
+    weekly_report_enabled: bool
+    weekly_report_day_of_week: str
+    weekly_report_time: str
+    weekly_report_timezone: str
 
 
 class SettingUpdate(BaseModel):
@@ -31,6 +38,10 @@ class SettingUpdate(BaseModel):
     silence_enabled: bool = False
     silence_start: str = Field(default="", max_length=5)
     silence_end: str = Field(default="", max_length=5)
+    weekly_report_enabled: bool = True
+    weekly_report_day_of_week: str = Field(default="fri", min_length=3, max_length=3)
+    weekly_report_time: str = Field(default="17:00", max_length=5)
+    weekly_report_timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=64)
 
     @field_validator("silence_start", "silence_end")
     @classmethod
@@ -43,6 +54,34 @@ class SettingUpdate(BaseModel):
         except ValueError as exc:
             raise ValueError("静默时间必须使用 HH:MM 格式") from exc
         return value
+
+    @field_validator("weekly_report_day_of_week")
+    @classmethod
+    def validate_weekly_report_day(cls, value: str) -> str:
+        day = value.strip().lower()
+        if day not in VALID_WEEKDAYS:
+            raise ValueError("周报星期必须是 mon/tue/wed/thu/fri/sat/sun 之一")
+        return day
+
+    @field_validator("weekly_report_time")
+    @classmethod
+    def validate_weekly_report_time(cls, value: str) -> str:
+        value = value.strip()
+        try:
+            datetime.strptime(value, "%H:%M")
+        except ValueError as exc:
+            raise ValueError("周报推送时间必须使用 HH:MM 格式") from exc
+        return value
+
+    @field_validator("weekly_report_timezone")
+    @classmethod
+    def validate_weekly_report_timezone(cls, value: str) -> str:
+        timezone = value.strip()
+        try:
+            ZoneInfo(timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("周报时区必须使用有效 IANA 时区，例如 Asia/Shanghai") from exc
+        return timezone
 
     @model_validator(mode="after")
     def validate_silence_window(self):
@@ -62,6 +101,10 @@ def get_or_create_setting(session) -> SystemSetting:
             silence_enabled=False,
             silence_start="",
             silence_end="",
+            weekly_report_enabled=True,
+            weekly_report_day_of_week="fri",
+            weekly_report_time="17:00",
+            weekly_report_timezone="Asia/Shanghai",
         )
         session.add(setting)
         session.commit()
@@ -79,6 +122,10 @@ def _setting_out(setting: SystemSetting) -> SettingOut:
         silence_enabled=setting.silence_enabled,
         silence_start=setting.silence_start,
         silence_end=setting.silence_end,
+        weekly_report_enabled=setting.weekly_report_enabled,
+        weekly_report_day_of_week=setting.weekly_report_day_of_week,
+        weekly_report_time=setting.weekly_report_time,
+        weekly_report_timezone=setting.weekly_report_timezone,
     )
 
 
@@ -89,7 +136,11 @@ def get_settings(_: None = Depends(verify_admin_token)) -> SettingOut:
 
 
 @router.put("/settings", response_model=SettingOut)
-def update_settings(payload: SettingUpdate, _: None = Depends(verify_admin_token)) -> SettingOut:
+def update_settings(
+    payload: SettingUpdate,
+    request: Request,
+    _: None = Depends(verify_admin_token),
+) -> SettingOut:
     with SessionLocal() as session:
         setting = get_or_create_setting(session)
         setting.ping_interval = payload.ping_interval
@@ -99,7 +150,14 @@ def update_settings(payload: SettingUpdate, _: None = Depends(verify_admin_token
         setting.silence_enabled = payload.silence_enabled
         setting.silence_start = payload.silence_start
         setting.silence_end = payload.silence_end
+        setting.weekly_report_enabled = payload.weekly_report_enabled
+        setting.weekly_report_day_of_week = payload.weekly_report_day_of_week
+        setting.weekly_report_time = payload.weekly_report_time
+        setting.weekly_report_timezone = payload.weekly_report_timezone
         session.commit()
         session.refresh(setting)
+        scheduler = getattr(request.app.state, "scheduler", None)
+        if scheduler is not None:
+            schedule_weekly_report_job(scheduler)
         log_event(category="settings", message="监控参数已更新")
         return _setting_out(setting)

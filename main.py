@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,8 +22,8 @@ from auth import create_admin_token, is_admin_configured, verify_admin_credentia
 from database import Base, engine
 from engine import monitor_loop, shutdown_monitor_task
 from logging_service import configure_logging, log_event
+from services.report_scheduler import schedule_weekly_report_job
 from services.schema import ensure_default_setting, ensure_schema_columns
-from weekly_report import run_weekly_report_and_cleanup
 import models  # noqa: F401 - Ensure model metadata is registered
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -90,14 +89,7 @@ async def lifespan(app: FastAPI):
     )
 
     app.state.scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
-    app.state.scheduler.add_job(
-        run_weekly_report_and_cleanup,
-        trigger=CronTrigger(day_of_week="fri", hour=17, minute=0, timezone="Asia/Shanghai"),
-        id="weekly_report_cleanup",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-    )
+    schedule_weekly_report_job(app.state.scheduler)
     app.state.scheduler.start()
 
     yield

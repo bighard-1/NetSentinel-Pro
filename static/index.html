@@ -351,6 +351,20 @@
       font-size: 11px;
     }
     .form-grid { display: grid; gap: 10px; }
+    .form-section {
+      display: grid;
+      gap: 10px;
+      border: 1px solid rgba(88,216,255,.18);
+      border-radius: var(--radius);
+      background: rgba(88,216,255,.05);
+      padding: 12px;
+    }
+    .section-title {
+      color: var(--color-accent-2);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .04em;
+    }
     .detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
     .detail-card { border: 1px solid var(--color-line); border-radius: var(--radius); background: var(--color-panel-2); padding: 10px; }
     .detail-card strong { display: block; margin-top: 6px; font-size: 20px; }
@@ -643,6 +657,26 @@
               <label>开始<input v-model="settings.silence_start" type="time" class="input" /></label>
               <label>结束<input v-model="settings.silence_end" type="time" class="input" /></label>
               <span class="panel-note">按 Asia/Shanghai 生效，只抑制通知，不停止探测。</span>
+            </div>
+            <div class="form-section">
+              <div class="section-title">周报推送</div>
+              <label class="check-row"><input v-model="settings.weekly_report_enabled" type="checkbox" />启用每周稳定性周报</label>
+              <div class="toolbar" style="padding:0;border:0;background:transparent;">
+                <label>星期
+                  <select v-model="settings.weekly_report_day_of_week" class="select">
+                    <option value="mon">周一</option>
+                    <option value="tue">周二</option>
+                    <option value="wed">周三</option>
+                    <option value="thu">周四</option>
+                    <option value="fri">周五</option>
+                    <option value="sat">周六</option>
+                    <option value="sun">周日</option>
+                  </select>
+                </label>
+                <label>时间<input v-model="settings.weekly_report_time" type="time" class="input" /></label>
+                <label>时区<input v-model="settings.weekly_report_timezone" class="input" placeholder="Asia/Shanghai" /></label>
+              </div>
+              <span class="panel-note">保存后立即重排后台任务；关闭后仅停止自动推送，不影响手动日志和告警。</span>
             </div>
             <button class="btn primary" @click="saveSettings">保存设置</button>
           </div>
@@ -1007,7 +1041,7 @@ const adminToken = ref(localStorage.getItem('admin_token') || '');
 const showAuthModal = ref(!adminToken.value);
 const showSettingsModal = ref(false);
 const settingsTab = ref('monitor');
-const settings = ref({ ping_interval: 30, offline_threshold: 3, online_threshold: 2, feishu_webhook: '', silence_enabled: false, silence_start: '', silence_end: '' });
+const settings = ref({ ping_interval: 30, offline_threshold: 3, online_threshold: 2, feishu_webhook: '', silence_enabled: false, silence_start: '', silence_end: '', weekly_report_enabled: true, weekly_report_day_of_week: 'fri', weekly_report_time: '17:00', weekly_report_timezone: 'Asia/Shanghai' });
 const settingsMsg = ref('');
 const settingsErr = ref('');
 const authError = ref('');

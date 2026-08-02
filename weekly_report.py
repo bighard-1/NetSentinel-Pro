@@ -1,18 +1,36 @@
-﻿from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import delete, func, select
 
 from alert import send_feishu_payload
 from database import SessionLocal
 from logging_service import log_event
-from models import AlertLog, Device, EventType
+from models import AlertLog, Device, EventType, SystemSetting
 
-SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+DEFAULT_REPORT_TIMEZONE = "Asia/Shanghai"
+
+
+def _normalize_timezone(value: str | None) -> str:
+    candidate = (value or DEFAULT_REPORT_TIMEZONE).strip()
+    try:
+        ZoneInfo(candidate)
+    except ZoneInfoNotFoundError:
+        return DEFAULT_REPORT_TIMEZONE
+    return candidate
+
+
+def _load_report_timezone() -> ZoneInfo:
+    with SessionLocal() as session:
+        setting = session.execute(select(SystemSetting).limit(1)).scalar_one_or_none()
+        timezone = _normalize_timezone(setting.weekly_report_timezone if setting else DEFAULT_REPORT_TIMEZONE)
+    return ZoneInfo(timezone)
 
 
 async def run_weekly_report_and_cleanup() -> None:
-    now = datetime.now(SHANGHAI_TZ)
+    report_tz = _load_report_timezone()
+    timezone_name = str(report_tz)
+    now = datetime.now(report_tz)
     since = now - timedelta(days=7)
 
     with SessionLocal() as session:
@@ -73,7 +91,7 @@ async def run_weekly_report_and_cleanup() -> None:
                 {
                     "tag": "markdown",
                     "content": (
-                        f"**统计周期**: {since.strftime('%Y-%m-%d %H:%M')} ~ {now.strftime('%Y-%m-%d %H:%M')} (Asia/Shanghai)\n"
+                        f"**统计周期**: {since.strftime('%Y-%m-%d %H:%M')} ~ {now.strftime('%Y-%m-%d %H:%M')} ({timezone_name})\n"
                         f"**整体在线率**: **{uptime_percent}%**\n"
                         f"**总告警次数**: **{total_alerts}**\n"
                         f"**监控设备数**: **{monitoring_device_count}**\n\n"

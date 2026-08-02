@@ -17,6 +17,10 @@ def ensure_default_setting() -> None:
                     silence_enabled=False,
                     silence_start="",
                     silence_end="",
+                    weekly_report_enabled=True,
+                    weekly_report_day_of_week="fri",
+                    weekly_report_time="17:00",
+                    weekly_report_timezone="Asia/Shanghai",
                 )
             )
             session.commit()
@@ -52,6 +56,14 @@ def ensure_schema_columns() -> None:
             conn.exec_driver_sql("ALTER TABLE system_settings ADD COLUMN silence_start VARCHAR(5) NOT NULL DEFAULT ''")
         if "silence_end" not in setting_columns:
             conn.exec_driver_sql("ALTER TABLE system_settings ADD COLUMN silence_end VARCHAR(5) NOT NULL DEFAULT ''")
+        if "weekly_report_enabled" not in setting_columns:
+            conn.exec_driver_sql("ALTER TABLE system_settings ADD COLUMN weekly_report_enabled BOOLEAN NOT NULL DEFAULT 1")
+        if "weekly_report_day_of_week" not in setting_columns:
+            conn.exec_driver_sql("ALTER TABLE system_settings ADD COLUMN weekly_report_day_of_week VARCHAR(3) NOT NULL DEFAULT 'fri'")
+        if "weekly_report_time" not in setting_columns:
+            conn.exec_driver_sql("ALTER TABLE system_settings ADD COLUMN weekly_report_time VARCHAR(5) NOT NULL DEFAULT '17:00'")
+        if "weekly_report_timezone" not in setting_columns:
+            conn.exec_driver_sql("ALTER TABLE system_settings ADD COLUMN weekly_report_timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Shanghai'")
         conn.exec_driver_sql(
             """
             CREATE TABLE IF NOT EXISTS notification_channels (
