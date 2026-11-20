@@ -65,6 +65,18 @@ class Device(Base):
     )
 
 
+class RecycleBinEntry(Base):
+    __tablename__ = "recycle_bin_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_csv: Mapped[str] = mapped_column(Text, nullable=False)
+    operator: Mapped[str] = mapped_column(String(100), nullable=False)
+    device_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[DateTime] = mapped_column(UTCDateTime(), nullable=False)
+    expires_at: Mapped[DateTime] = mapped_column(UTCDateTime(), nullable=False, index=True)
+    restored_at: Mapped[DateTime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
 Index("uq_devices_target", Device.ip_address, Device.probe_type,
       func.coalesce(Device.probe_port, 0), Device.probe_path, unique=True)
 

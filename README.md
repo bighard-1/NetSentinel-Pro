@@ -54,6 +54,7 @@ NetSentinel Pro 是一套面向内网资产的轻量级 NOC 监控系统，适�
 
 - 系统日志记录登录、资产变更、策略变更、通知投递、备份恢复、手动探测等事件。
 - 批量删除前自动生成 CSV 快照，保存至 `data/audit/`。
+- 单个及批量删除会把设备配置写入 7 天回收站；可在删除提示中立即撤销，也可在控制台“回收站”恢复。历史探测指标和告警事件不会随配置恢复。
 - 删除快照内容同时写入日志详情，可按设备名/IP 检索。
 - 控制台提供“删除快照”管理页，支持按时间、操作者、设备名/IP 搜索。
 - 支持从删除快照中选择部分设备恢复，已存在相同 IP、探测类型、端口及路径组合的目标自动跳过。
@@ -64,6 +65,7 @@ NetSentinel Pro 是一套面向内网资产的轻量级 NOC 监控系统，适�
 - SQLite 单文件存储，适合轻量部署和快速迁移。
 - 支持数据库备份下载和恢复上传，恢复前执行完整性与大小检查。
 - 支持设备清单 CSV 导出。
+- 批量导入支持 CSV 模板、逐行预览校验和错误行 CSV 下载，确认后仅导入有效行。
 - 每周报告任务会生成稳定性摘要，支持在控制台自定义推送星期、时间、时区和启停状态。历史数据每日独立清理，停用周报不影响清理。
 - 当前状态、连续成功或失败次数持久化到设备记录，重启或清理历史事件后仍能正确判定状态。
 - 提供 `scripts/self_check.py` 自检脚本，覆盖核心 API、探测、告警、通知、审计、恢复链路。
@@ -141,6 +143,7 @@ ALERT_STORM_THRESHOLD=3
 | `ALERT_RETENTION_DAYS` / `PROBE_METRIC_RETENTION_DAYS` | `90` / `14` | 告警事件和探测指标保留天数 |
 | `SYSTEM_LOG_RETENTION_DAYS` / `NOTIFICATION_DELIVERY_RETENTION_DAYS` / `ALERT_OUTBOX_RETENTION_DAYS` | `30` / `30` / `90` | 日志、投递记录与告警队列保留天数 |
 | `BACKUP_RETENTION_COUNT` | `10` | 各类升级前和恢复前备份分别保留最近 N 份 |
+| `RECYCLE_BIN_RETENTION_DAYS` | `7` | 删除设备配置在回收站保留天数 |
 | `ENABLE_DOCS` / `ENABLE_HSTS` | `false` / `false` | API 文档和 HSTS 响应头 |
 | `ALLOW_PRIVATE_WEBHOOK` / `TRUSTED_PROXIES` | `false` / 空 | 内网 Webhook 例外、可信代理 IP 列表 |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` / `SMTP_TLS` | 空 / `587` / 空 / 空 / 空 / `true` | 邮件渠道配置 |

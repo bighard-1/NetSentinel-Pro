@@ -179,7 +179,7 @@ async def add_security_headers(request: Request, call_next):
         if payload["scope"] == "viewer" and request.method not in {"GET", "HEAD", "OPTIONS"} and path != "/api/auth/logout":
             return JSONResponse(status_code=403, content={"detail": "Viewer account is read only"},
                                 headers={"Cache-Control": "no-store"})
-    if path == "/api/devices/bulk" and request.method == "POST":
+    if path in {"/api/devices/bulk", "/api/devices/bulk-preview"} and request.method == "POST":
         if "content-length" not in request.headers:
             return JSONResponse(status_code=411, content={"detail": "Content-Length is required"})
         try:

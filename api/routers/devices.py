@@ -4,13 +4,14 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy import delete, desc, func, select
 
 from api.dependencies import current_admin_subject, verify_admin_token
 from database import DB_DIR, SessionLocal
 from logging_service import log_event
-from models import AlertLog, Device, EventType, MonitoringState, ProbeMetric, ProbeType, SystemLog
+from models import AlertLog, Device, EventType, MonitoringState, ProbeMetric, ProbeType, RecycleBinEntry, SystemLog
+from services.config import load_config
 from services.device_status import (
     DeviceOut,
     as_aware_utc,
@@ -47,6 +48,10 @@ class DeviceCreate(BaseModel):
 
 class DeviceBulkCreate(BaseModel):
     devices: list[DeviceCreate] = Field(min_length=1, max_length=1000)
+
+
+class BulkImportPreviewRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1048576)
 
 
 class DeviceBulkUpdate(BaseModel):
@@ -155,6 +160,15 @@ class DeletedSnapshotSummaryOut(BaseModel):
     deleted: int
     skipped: int
     device_count: int
+    device_preview: list[str]
+
+
+class RecycleBinOut(BaseModel):
+    id: int
+    operator: str
+    device_count: int
+    created_at: datetime
+    expires_at: datetime
     device_preview: list[str]
 
 
@@ -276,6 +290,7 @@ def _deleted_devices_csv_snapshot(devices: list[Device]) -> str:
             "probe_path",
             "expected_status",
             "probe_interval_seconds",
+            "probe_retry_count",
             "maintenance_until",
             "maintenance_note",
         ]
@@ -293,6 +308,7 @@ def _deleted_devices_csv_snapshot(devices: list[Device]) -> str:
                 device.probe_path,
                 device.expected_status or "",
                 device.probe_interval_seconds or "",
+                device.probe_retry_count or 0,
                 device.maintenance_until.isoformat() if device.maintenance_until else "",
                 device.maintenance_note,
             ]
@@ -307,6 +323,22 @@ def _save_deleted_devices_snapshot(csv_text: str) -> str:
     path = audit_dir / f"deleted-devices-{timestamp}.csv"
     path.write_text(csv_text, encoding="utf-8-sig")
     return str(path)
+
+
+def _create_recycle_entry(session, devices: list[Device], operator: str, snapshot_csv: str) -> int | None:
+    if not devices:
+        return None
+    created_at = datetime.now(timezone.utc)
+    entry = RecycleBinEntry(
+        snapshot_csv=snapshot_csv,
+        operator=operator,
+        device_count=len(devices),
+        created_at=created_at,
+        expires_at=created_at + timedelta(days=load_config().recycle_bin_retention_days),
+    )
+    session.add(entry)
+    session.flush()
+    return entry.id
 
 
 def _audit_details(
@@ -394,6 +426,7 @@ def _parse_deleted_snapshot_rows(csv_text: str) -> list[dict]:
                     "probe_path": probe_path,
                     "expected_status": expected_status,
                     "probe_interval_seconds": _optional_int(row.get("probe_interval_seconds")),
+                    "probe_retry_count": _optional_int(row.get("probe_retry_count")) or 0,
                     "maintenance_until": _optional_datetime(row.get("maintenance_until")),
                     "maintenance_note": (row.get("maintenance_note") or "").strip(),
                 }
@@ -592,6 +625,7 @@ def restore_deleted_snapshot(
                 probe_path=row["probe_path"],
                 expected_status=row["expected_status"],
                 probe_interval_seconds=row["probe_interval_seconds"],
+                probe_retry_count=row["probe_retry_count"],
             )
             session.add(device)
             restored_targets.append(f"{row['name']}({row['ip_address']})")
@@ -609,6 +643,58 @@ def restore_deleted_snapshot(
         + "\n"
         + "\n".join(restored_targets[:100]),
     )
+    return {"status": "success", "restored": restored, "skipped": skipped}
+
+
+@router.get("/recycle-bin", response_model=list[RecycleBinOut])
+def list_recycle_bin(_: None = Depends(verify_admin_token)) -> list[RecycleBinOut]:
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        entries = session.execute(
+            select(RecycleBinEntry)
+            .where(RecycleBinEntry.expires_at > now, RecycleBinEntry.restored_at.is_(None))
+            .order_by(RecycleBinEntry.id.desc()).limit(100)
+        ).scalars().all()
+        return [RecycleBinOut(
+            id=entry.id, operator=entry.operator, device_count=entry.device_count,
+            created_at=entry.created_at, expires_at=entry.expires_at,
+            device_preview=[row["name"] for row in _parse_deleted_snapshot_rows(entry.snapshot_csv)[:5]],
+        ) for entry in entries]
+
+
+@router.post("/recycle-bin/{entry_id}/restore")
+def restore_recycle_entry(entry_id: int, operator: str = Depends(current_admin_subject)) -> dict[str, int | str]:
+    now = datetime.now(timezone.utc)
+    restored = 0
+    skipped = 0
+    with SessionLocal() as session:
+        entry = session.get(RecycleBinEntry, entry_id)
+        if entry is None or entry.expires_at <= now or entry.restored_at is not None:
+            raise HTTPException(status_code=404, detail="Recycle-bin entry is unavailable")
+        seen: set[tuple[str, str, int, str]] = set()
+        for row in _parse_deleted_snapshot_rows(entry.snapshot_csv):
+            key = _target_key(row["ip_address"], row["probe_type"], row["probe_port"], row["probe_path"])
+            if key in seen or _existing_target(session, row["ip_address"], row["probe_type"],
+                                                row["probe_port"], row["probe_path"]):
+                skipped += 1
+                continue
+            seen.add(key)
+            session.add(Device(
+                name=row["name"], ip_address=row["ip_address"], group_name=row["group_name"],
+                is_monitoring=row["monitoring_state"] == MonitoringState.ACTIVE,
+                monitoring_state=row["monitoring_state"], maintenance_until=row["maintenance_until"],
+                maintenance_note=row["maintenance_note"], probe_type=row["probe_type"],
+                probe_port=row["probe_port"], probe_path=row["probe_path"],
+                expected_status=row["expected_status"],
+                probe_interval_seconds=row["probe_interval_seconds"],
+                probe_retry_count=row["probe_retry_count"],
+            ))
+            restored += 1
+        entry.restored_at = now
+        session.commit()
+    log_event(category="asset", message=f"从回收站恢复设备: {restored} 台，跳过 {skipped}",
+              details=_audit_details(action="RESTORE", operator=operator,
+                                     extra={"recycle_id": entry_id, "restored": restored, "skipped": skipped}))
     return {"status": "success", "restored": restored, "skipped": skipped}
 
 
@@ -771,6 +857,72 @@ def create_device(payload: DeviceCreate, operator: str = Depends(current_admin_s
     return _device_out(device)
 
 
+@router.post("/bulk-preview")
+def preview_devices_bulk(payload: BulkImportPreviewRequest,
+                         _: str = Depends(current_admin_subject)) -> dict:
+    try:
+        reader = csv.reader(io.StringIO(payload.text.lstrip("\ufeff")), strict=True)
+        parsed_rows = [(reader.line_num, row) for row in reader]
+    except csv.Error as exc:
+        raise HTTPException(status_code=400, detail="CSV 格式无效，请检查引号和分隔符") from exc
+    if parsed_rows and len(parsed_rows[0][1]) >= 2 and [cell.strip().lower() for cell in parsed_rows[0][1][:2]] == ["name", "ip_address"]:
+        parsed_rows = parsed_rows[1:]
+    parsed_rows = [(line, row) for line, row in parsed_rows if any(cell.strip() for cell in row)]
+    if len(parsed_rows) > 1000:
+        raise HTTPException(status_code=400, detail="每次最多预览 1000 行设备")
+
+    with SessionLocal() as session:
+        existing_targets = {
+            _target_key(ip, probe_type, port, path)
+            for ip, probe_type, port, path in session.execute(
+                select(Device.ip_address, Device.probe_type, Device.probe_port, Device.probe_path)
+            )
+        }
+    seen_targets: set[tuple[str, str, int, str]] = set()
+    preview: list[dict] = []
+    accepted: list[dict] = []
+    labels = {"name": "设备名称", "ip_address": "IP/主机名", "group_name": "分组",
+              "probe_type": "探测类型", "probe_port": "端口", "probe_path": "探测路径"}
+    for line, row in parsed_rows:
+        entry: dict = {"line": line, "name": row[0].strip() if row else "",
+                       "ip_address": row[1].strip() if len(row) > 1 else "", "raw": row, "error": ""}
+        try:
+            if len(row) not in {3, 6}:
+                raise ValueError("应填写 3 列（名称,地址,分组）或 6 列（再加类型,端口,路径）")
+            name, host, group = [cell.strip() for cell in row[:3]]
+            probe_type = row[3].strip().upper() if len(row) == 6 and row[3].strip() else "ICMP"
+            try:
+                probe_port = int(row[4].strip()) if len(row) == 6 and row[4].strip() else None
+            except ValueError as exc:
+                raise ValueError("端口必须是 1 至 65535 的整数") from exc
+            probe_path = row[5].strip() if len(row) == 6 else ""
+            device = DeviceCreate.model_validate({
+                "name": name, "ip_address": host, "group_name": group or "default",
+                "probe_type": probe_type, "probe_port": probe_port, "probe_path": probe_path,
+            })
+            _validate_probe_config(device.probe_type, device.probe_port, device.probe_path, device.expected_status)
+            key = _target_key(device.ip_address, device.probe_type, device.probe_port, device.probe_path)
+            if key in existing_targets or key in seen_targets:
+                raise ValueError("该探测目标已存在或在文件中重复")
+            seen_targets.add(key)
+            entry["device"] = device.model_dump(mode="json")
+            accepted.append(entry["device"])
+        except ValidationError as exc:
+            field = str(exc.errors()[0]["loc"][0])
+            entry["error"] = f"{labels.get(field, field)}格式不正确"
+        except HTTPException as exc:
+            entry["error"] = {
+                "TCP probe requires probe_port": "TCP 探测必须填写端口",
+                "probe_port is only used by TCP probe": "只有 TCP 探测可以填写端口",
+                "probe_path is only used by HTTP probe": "只有 HTTP 探测可以填写路径",
+                "probe_path must not contain whitespace or control characters": "探测路径不能包含空格或控制字符",
+            }.get(str(exc.detail), str(exc.detail))
+        except (TypeError, ValueError) as exc:
+            entry["error"] = str(exc)
+        preview.append(entry)
+    return {"rows": preview, "valid": len(accepted), "invalid": len(preview) - len(accepted)}
+
+
 @router.post("/bulk")
 def create_devices_bulk(payload: DeviceBulkCreate, operator: str = Depends(current_admin_subject)) -> dict[str, int | str]:
     imported = 0
@@ -874,6 +1026,7 @@ def delete_devices_bulk(
         devices = session.execute(select(Device).where(Device.id.in_(unique_ids))).scalars().all()
         csv_snapshot = _deleted_devices_csv_snapshot(devices)
         snapshot_path = _save_deleted_devices_snapshot(csv_snapshot) if devices else ""
+        recycle_id = _create_recycle_entry(session, devices, operator, csv_snapshot)
         for device in devices:
             session.delete(device)
         if devices:
@@ -896,7 +1049,7 @@ def delete_devices_bulk(
         message=f"批量删除设备: {deleted} 台，跳过 {skipped}",
         details=details,
     )
-    return {"status": "deleted", "deleted": deleted, "skipped": skipped}
+    return {"status": "deleted", "deleted": deleted, "skipped": skipped, "recycle_id": recycle_id or 0}
 
 
 @router.put("/{device_id}", response_model=DeviceOut)
@@ -1008,7 +1161,7 @@ def update_device(device_id: int, payload: DeviceUpdate, operator: str = Depends
 
 
 @router.delete("/{device_id}")
-def delete_device(device_id: int, operator: str = Depends(current_admin_subject)) -> dict[str, str]:
+def delete_device(device_id: int, operator: str = Depends(current_admin_subject)) -> dict[str, str | int]:
     with SessionLocal() as session:
         device = session.get(Device, device_id)
         if device is None:
@@ -1016,6 +1169,9 @@ def delete_device(device_id: int, operator: str = Depends(current_admin_subject)
         name = device.name
         ip_address = device.ip_address
         group_name = device.group_name
+        csv_snapshot = _deleted_devices_csv_snapshot([device])
+        snapshot_path = _save_deleted_devices_snapshot(csv_snapshot)
+        recycle_id = _create_recycle_entry(session, [device], operator, csv_snapshot)
         session.delete(device)
         session.execute(delete(ProbeMetric).where(ProbeMetric.device_id == device_id))
         session.commit()
@@ -1029,7 +1185,8 @@ def delete_device(device_id: int, operator: str = Depends(current_admin_subject)
             target_name=name,
             target_ip=ip_address,
             device_id=device_id,
-            extra={"group_name": group_name},
-        ),
+            extra={"group_name": group_name, "recycle_id": recycle_id,
+                   "snapshot_file": snapshot_path},
+        ) + "\nCSV_SNAPSHOT_START\n" + csv_snapshot,
     )
-    return {"status": "deleted"}
+    return {"status": "deleted", "recycle_id": recycle_id}

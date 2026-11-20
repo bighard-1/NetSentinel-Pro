@@ -6,6 +6,7 @@
 .test-p1-*/
 .test-p2-*/
 .test-p3-*/
+.test-p4-*/
 .bench-p1-*/
 .env
 data/*.db

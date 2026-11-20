@@ -413,6 +413,7 @@
       font-size: 13px;
     }
     .toast.error { border-color: rgba(255,77,95,.7); color: #ffced4; }
+    .toast .mini-btn { margin-left:10px; }
     @media (max-width: 1180px) {
       .overview { grid-template-columns:repeat(4,minmax(0,1fr)); }
       .layout > aside.panel .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -439,7 +440,7 @@
 </head>
 <body>
   <div id="app" class="shell">
-    <div v-if="toast.show" class="toast" :class="{error: toast.type === 'error'}">{{ toast.message }}</div>
+    <div v-if="toast.show" class="toast" :class="{error: toast.type === 'error'}" role="status">{{ toast.message }}<button v-if="toast.undoId" class="mini-btn primary" @click="restoreRecycleEntry(toast.undoId)">撤销删除</button></div>
     <div v-if="weakAdminPassword && authRole === 'admin'" role="alert" style="padding:10px 18px;background:#7b1d22;color:#fff">管理员密码强度不足，请更新 ADMIN_PASS。</div>
 
     <header class="topbar">
@@ -711,6 +712,7 @@
           <div class="tabs">
             <button class="tab" :class="{active: settingsTab==='monitor'}" @click="settingsTab='monitor'">监控参数</button>
             <button class="tab" :class="{active: settingsTab==='dr'}" @click="settingsTab='dr'">数据灾备</button>
+            <button class="tab" :class="{active: settingsTab==='recycle'}" @click="openRecycleTab">回收站</button>
             <button class="tab" :class="{active: settingsTab==='policies'}" @click="openPoliciesTab">分组策略</button>
             <button class="tab" :class="{active: settingsTab==='channels'}" @click="openChannelsTab">通知渠道</button>
             <button class="tab" :class="{active: settingsTab==='audit'}" @click="openAuditTab">操作审计</button>
@@ -760,6 +762,13 @@
             </div>
             <label>恢复数据库 (.db)<input type="file" accept=".db" @change="onRestoreFileChange" class="input" /></label>
             <button class="btn danger" @click="restoreBackup">上传并覆盖恢复</button>
+          </div>
+
+          <div v-else-if="settingsTab==='recycle'" class="form-grid">
+            <p class="subtitle">删除的设备配置保留 7 天，可在到期前恢复。历史探测与告警记录不随设备恢复。</p>
+            <div class="table-wrap"><table><thead><tr><th>删除时间</th><th>到期时间</th><th>操作人</th><th>设备</th><th>操作</th></tr></thead>
+              <tbody><tr v-for="entry in recycleBin" :key="entry.id"><td>{{ formatTime(entry.created_at) }}</td><td>{{ formatTime(entry.expires_at) }}</td><td>{{ entry.operator }}</td><td>{{ entry.device_count }} 台：{{ entry.device_preview.join('、') }}</td><td><button class="btn primary" @click="restoreRecycleEntry(entry.id)">恢复</button></td></tr>
+                <tr v-if="!recycleBin.length"><td colspan="5">回收站为空</td></tr></tbody></table></div>
           </div>
 
           <div v-else-if="settingsTab==='policies'" class="form-grid">
@@ -1027,8 +1036,20 @@
             <button class="btn primary" @click="saveSingleAsset">{{ assetForm.id ? '保存修改' : '新增设备' }}</button>
           </div>
           <div v-else class="form-grid">
-            <textarea v-model="bulkText" class="textarea" placeholder="每行一个：设备名,IP或主机名,分组"></textarea>
-            <button class="btn primary" @click="submitBulkImport">提交批量导入</button>
+            <p class="subtitle">每行填写名称、地址、分组；可选添加探测类型、端口、路径。支持标准 CSV 引号。</p>
+            <textarea v-model="bulkText" @input="bulkPreview=null" class="textarea" placeholder="名称,IP或主机名,分组&#10;核心交换机,10.0.0.1,网络设备"></textarea>
+            <div class="actions" style="justify-content:flex-start;">
+              <button class="btn" @click="downloadBulkTemplate">下载 CSV 模板</button>
+              <button class="btn primary" :disabled="!bulkText.trim()" @click="previewBulkImport">预览并校验</button>
+              <button v-if="bulkPreview && bulkPreview.invalid" class="btn" @click="downloadBulkErrors">下载错误行 CSV</button>
+            </div>
+            <template v-if="bulkPreview">
+              <p :class="bulkPreview.invalid ? 'err' : 'msg'">可导入 {{ bulkPreview.valid }} 行，需修正 {{ bulkPreview.invalid }} 行</p>
+              <div class="table-wrap"><table><thead><tr><th>行号</th><th>名称</th><th>地址</th><th>结果</th></tr></thead><tbody>
+                <tr v-for="row in bulkPreview.rows" :key="row.line"><td>{{ row.line }}</td><td>{{ row.name }}</td><td>{{ row.ip_address }}</td><td :class="row.error ? 'err' : 'msg'">{{ row.error || '可导入' }}</td></tr>
+              </tbody></table></div>
+              <button class="btn primary" :disabled="!bulkPreview.valid" @click="submitBulkImport">确认导入 {{ bulkPreview.valid }} 行</button>
+            </template>
           </div>
         </div>
       </div>
@@ -1140,8 +1161,9 @@ const maintenanceUntilLocal = ref('');
 const maintenanceNote = ref('');
 const assetTab = ref('single');
 const bulkText = ref('');
+const bulkPreview = ref(null);
 	const assetForm = ref({ id:null, name:'', ip_address:'', group_name:'default', is_monitoring:true, monitoring_state:'ACTIVE', probe_type:'ICMP', probe_port:null, probe_path:'', expected_status:null, probe_interval_seconds:null });
-const toast = ref({ show:false, type:'success', message:'' });
+const toast = ref({ show:false, type:'success', message:'', undoId:0 });
 const selectedGroup = ref(hashView.get('group')||savedView.group||'__ALL__');
 const statusFilter = ref(hashView.get('status')||savedView.status||'');
 const keyword = ref(hashView.get('q')||'');
@@ -1160,6 +1182,7 @@ const auditKeyword = ref('');
 const auditDeviceId = ref(null);
 const auditAction = ref('');
 const deleteSnapshots = ref([]);
+const recycleBin = ref([]);
 const snapshotKeyword = ref('');
 const snapshotOperator = ref('');
 const snapshotStart = ref('');
@@ -1186,7 +1209,8 @@ const channelForm = ref({ id:null, name:'', channel_type:'FEISHU', endpoint:'', 
 	let timer = null;
 	let clockTimer = null;
 
-const showToast=(message,type='success')=>{toast.value={show:true,type,message};setTimeout(()=>toast.value.show=false,2500)};
+let toastTimer=null;
+const showToast=(message,type='success',undoId=0)=>{clearTimeout(toastTimer);toast.value={show:true,type,message,undoId};toastTimer=setTimeout(()=>toast.value.show=false,undoId?10000:3000);};
 const authHeaders=()=>({Authorization:`Bearer ${adminToken.value}`});
 const apiJson=async(url,options={})=>{const r=await fetch(url,options);const b=await r.json().catch(()=>({}));if(!r.ok){if(r.status===401 && url!=='/api/auth/login'){adminToken.value='';sessionStorage.removeItem('admin_token');sessionStorage.removeItem('auth_role');showAuthModal.value=true;}const err=new Error(b.detail||`请求失败: ${r.status}`);err.status=r.status;throw err;}return b;};
 const refreshDashboard=async()=>{if(!adminToken.value)return;await Promise.all([fetchDevices(), fetchSummary(), fetchRiskDevices(), fetchReadiness()]); await fetchAlerts(true);};
@@ -1216,18 +1240,23 @@ const openSettings=async()=>{if(!adminToken.value){showAuthModal.value=true;retu
 	const bulkUpdateProbeInterval=()=>bulkUpdateDevices({probe_interval_seconds:Number(bulkProbeInterval.value)},'批量改周期完成');
 	const openBulkDeleteConfirm=()=>{if(!selectedDeviceIds.value.length){showToast('请先选择设备','error');return;}bulkDeleteConfirmation.value='';showBulkDeleteModal.value=true;};
 	const closeBulkDeleteConfirm=()=>{showBulkDeleteModal.value=false;bulkDeleteConfirmation.value='';};
-	const bulkDeleteDevices=async()=>{if(!adminToken.value||isBulkUpdating.value)return;const expected=String(selectedDeviceIds.value.length);if(bulkDeleteConfirmation.value.trim()!==expected){showToast(`请输入 ${expected} 后再删除`,'error');return;}isBulkUpdating.value=true;try{const result=await apiJson('/api/devices/bulk-delete',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({device_ids:selectedDeviceIds.value,confirmation:bulkDeleteConfirmation.value.trim()})});await refreshDashboard();clearBulkSelection();closeBulkDeleteConfirm();showToast(`批量删除完成: ${result.deleted} 台`);}catch(e){if(e.status===401){adminToken.value='';sessionStorage.removeItem('admin_token');showAuthModal.value=true;}showToast(e.message,'error');}finally{isBulkUpdating.value=false;}};
+	const bulkDeleteDevices=async()=>{if(!adminToken.value||isBulkUpdating.value)return;const expected=String(selectedDeviceIds.value.length);if(bulkDeleteConfirmation.value.trim()!==expected){showToast(`请输入 ${expected} 后再删除`,'error');return;}isBulkUpdating.value=true;try{const result=await apiJson('/api/devices/bulk-delete',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({device_ids:selectedDeviceIds.value,confirmation:bulkDeleteConfirmation.value.trim()})});await refreshDashboard();clearBulkSelection();closeBulkDeleteConfirm();showToast(`已移入回收站: ${result.deleted} 台`, 'success', result.recycle_id||0);}catch(e){if(e.status===401){adminToken.value='';sessionStorage.removeItem('admin_token');showAuthModal.value=true;}showToast(e.message,'error');}finally{isBulkUpdating.value=false;}};
 		const emptyAssetForm=()=>({id:null,name:'',ip_address:'',group_name:'default',is_monitoring:true,monitoring_state:'ACTIVE',probe_type:'ICMP',probe_port:null,probe_path:'',expected_status:null,probe_interval_seconds:null});
 	const openAssetModalForCreate=()=>{assetTab.value='single';assetForm.value=emptyAssetForm();showAssetModal.value=true;};
 	const openAssetModalForEdit=(d)=>{assetTab.value='single';assetForm.value={id:d.id,name:d.name,ip_address:d.ip_address,group_name:d.group_name||'default',is_monitoring:!!d.is_monitoring,monitoring_state:d.monitoring_state|| (d.is_monitoring?'ACTIVE':'PAUSED'),probe_type:d.probe_type||'ICMP',probe_port:d.probe_port||null,probe_path:d.probe_path||'',expected_status:d.expected_status||null,probe_interval_seconds:d.probe_interval_seconds||null};showAssetModal.value=true;};
 	const normalizedAssetPayload=()=>{const monitoringState=assetForm.value.monitoring_state || (assetForm.value.is_monitoring?'ACTIVE':'PAUSED');const p={name:assetForm.value.name.trim(),ip_address:assetForm.value.ip_address.trim(),group_name:(assetForm.value.group_name||'default').trim()||'default',is_monitoring:monitoringState==='ACTIVE',monitoring_state:monitoringState,probe_type:assetForm.value.probe_type||'ICMP',probe_port:null,probe_path:'',expected_status:null,probe_interval_seconds:assetForm.value.probe_interval_seconds?Number(assetForm.value.probe_interval_seconds):null};if(p.probe_type==='TCP')p.probe_port=assetForm.value.probe_port?Number(assetForm.value.probe_port):null;if(p.probe_type==='HTTP'){p.probe_path=(assetForm.value.probe_path||'').trim();p.expected_status=assetForm.value.expected_status?Number(assetForm.value.expected_status):null;}return p;};
 const saveSingleAsset=async()=>{if(!adminToken.value)return;const p=normalizedAssetPayload();if(!p.name||!p.ip_address){showToast('设备名称和IP地址不能为空','error');return;}if(p.probe_type==='TCP'&&!p.probe_port){showToast('TCP 探测需要填写端口','error');return;}try{if(assetForm.value.id){await apiJson(`/api/devices/${assetForm.value.id}`,{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(p)});}else{await apiJson('/api/devices',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(p)});}await refreshDashboard();if(deviceDetail.value&&assetForm.value.id===deviceDetail.value.device.id)await refreshOpenDeviceDetail();showAssetModal.value=false;showToast(assetForm.value.id?'设备修改成功':'设备新增成功');}catch(e){showToast(e.message,'error');}};
-const submitBulkImport=async()=>{if(!adminToken.value)return;const lines=bulkText.value.split('\n').map(s=>s.trim()).filter(Boolean);if(!lines.length){showToast('请先输入批量设备内容','error');return;}const arr=[];for(const line of lines){const p=line.split(',').map(x=>x.trim());if(p.length<2||!p[0]||!p[1]){showToast(`格式错误: ${line}`,'error');return;}arr.push({name:p[0],ip_address:p[1],group_name:p[2]||'default',is_monitoring:true});}try{const b=await apiJson('/api/devices/bulk',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({devices:arr})});await refreshDashboard();bulkText.value='';showToast(`导入完成: 新增 ${b.imported}，跳过 ${b.skipped}`);}catch(e){showToast(e.message,'error');}};
+const downloadText=(filename,text)=>{const url=URL.createObjectURL(new Blob(['\ufeff',text],{type:'text/csv;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download=filename;link.click();URL.revokeObjectURL(url);};
+const csvCell=(value)=>{let cell=String(value??'');if(/^[\s]*[=+\-@]/.test(cell))cell="'"+cell;return `"${cell.replaceAll('"','""')}"`;};
+const downloadBulkTemplate=()=>downloadText('netsentinel-import-template.csv','name,ip_address,group_name,probe_type,probe_port,probe_path\n核心交换机,10.0.0.1,网络设备,ICMP,,\nSSH服务,10.0.0.2,服务器,TCP,22,\n');
+const downloadBulkErrors=()=>{if(!bulkPreview.value)return;const lines=['line,name,ip_address,group_name,probe_type,probe_port,probe_path,error'];for(const row of bulkPreview.value.rows.filter(row=>row.error)){lines.push([row.line,...Array.from({length:6},(_,index)=>row.raw[index]||''),row.error].map(csvCell).join(','));}downloadText('netsentinel-import-errors.csv',lines.join('\n')+'\n');};
+const previewBulkImport=async()=>{if(!bulkText.value.trim()){showToast('请先输入 CSV 内容','error');return;}try{bulkPreview.value=await apiJson('/api/devices/bulk-preview',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({text:bulkText.value})});}catch(e){showToast(e.message,'error');}};
+const submitBulkImport=async()=>{if(!adminToken.value||!bulkPreview.value)return;const devicesToImport=bulkPreview.value.rows.filter(row=>!row.error&&row.device).map(row=>row.device);if(!devicesToImport.length)return;try{const result=await apiJson('/api/devices/bulk',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({devices:devicesToImport})});await refreshDashboard();bulkText.value='';bulkPreview.value=null;showToast(`导入完成: 新增 ${result.imported}，跳过 ${result.skipped}`);}catch(e){showToast(e.message,'error');}};
 	const setMonitoringState=async(d,state)=>{if(!adminToken.value)return;try{await apiJson(`/api/devices/${d.id}`,{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({monitoring_state:state})});await refreshDashboard();const text={ACTIVE:'已启用监控',PAUSED:'已暂停监控',STOPPED:'已停止监控，卡片已保留'}[state]||'监控状态已更新';showToast(text);}catch(e){showToast(e.message,'error');}};
 	const pauseMonitoring=(d)=>setMonitoringState(d,'PAUSED');
 	const enableMonitoring=(d)=>setMonitoringState(d,'ACTIVE');
 	const stopMonitoring=async(d)=>{if(!confirm(`确认停止监控 ${d.name} (${d.ip_address}) 吗？目标会保留在监控墙上，但不再探测和告警。`))return;await setMonitoringState(d,'STOPPED');};
-	const deleteDevice=async(d)=>{if(!adminToken.value)return false; if(!confirm(`确认删除 ${d.name} (${d.ip_address}) 吗？删除后卡片会从监控墙移除。`))return false; try{await apiJson(`/api/devices/${d.id}`,{method:'DELETE',headers:authHeaders()});await refreshDashboard();showToast('已删除目标并移出监控墙');return true;}catch(e){showToast(e.message,'error');return false;}};
+	const deleteDevice=async(d)=>{if(!adminToken.value)return false; if(!confirm(`确认删除 ${d.name} (${d.ip_address}) 吗？设备配置会进入 7 天回收站。`))return false; try{const result=await apiJson(`/api/devices/${d.id}`,{method:'DELETE',headers:authHeaders()});await refreshDashboard();showToast('设备已移入回收站','success',result.recycle_id||0);return true;}catch(e){showToast(e.message,'error');return false;}};
 	const toggleMonitoring=async(d)=>setMonitoringState(d,d.is_monitoring?'PAUSED':'ACTIVE');
 	const updateDetailState=async(state)=>{if(!deviceDetail.value)return;await setMonitoringState(deviceDetail.value.device,state);await refreshOpenDeviceDetail();};
 	const pauseDetailDevice=()=>updateDetailState('PAUSED');
@@ -1265,6 +1294,9 @@ const fetchAuditTimeline=async()=>{const params=new URLSearchParams();if(auditKe
 const openAuditTab=async()=>{settingsTab.value='audit';try{await fetchAuditTimeline();}catch(e){showToast(e.message,'error');}};
 const snapshotDateParam=(value)=>value?new Date(value).toISOString():'';
 const fetchDeleteSnapshots=async()=>{const params=new URLSearchParams();if(snapshotKeyword.value.trim())params.set('q',snapshotKeyword.value.trim());if(snapshotOperator.value.trim())params.set('operator',snapshotOperator.value.trim());if(snapshotStart.value)params.set('start',snapshotDateParam(snapshotStart.value));if(snapshotEnd.value)params.set('end',snapshotDateParam(snapshotEnd.value));deleteSnapshots.value=await apiJson(`/api/devices/delete-snapshots?${params.toString()}`,{headers:authHeaders()});};
+const fetchRecycleBin=async()=>{recycleBin.value=await apiJson('/api/devices/recycle-bin',{headers:authHeaders()});};
+const openRecycleTab=async()=>{settingsTab.value='recycle';try{await fetchRecycleBin();}catch(e){showToast(e.message,'error');}};
+const restoreRecycleEntry=async(entryId)=>{try{const result=await apiJson(`/api/devices/recycle-bin/${entryId}/restore`,{method:'POST',headers:authHeaders()});await refreshDashboard();if(settingsTab.value==='recycle')await fetchRecycleBin();showToast(`已恢复 ${result.restored} 台，跳过 ${result.skipped} 台`);}catch(e){showToast(e.message,'error');}};
 const openSnapshotsTab=async()=>{settingsTab.value='snapshots';try{await fetchDeleteSnapshots();}catch(e){showToast(e.message,'error');}};
 const deletionSnapshotCsv=(log)=>{const marker='CSV_SNAPSHOT_START\n';const index=(log.details||'').indexOf(marker);return index>=0?log.details.slice(index+marker.length):'';};
 const isDeletionSnapshot=(log)=>!!deletionSnapshotCsv(log);
@@ -1323,8 +1355,8 @@ const formatAge=(value)=>{const ms=normalizeDateMs(value);if(ms===null)return '�
 const formatDuration=(seconds)=>{if(!seconds)return '-';const h=Math.floor(seconds/3600);const m=Math.floor((seconds%3600)/60);const s=seconds%60;if(h)return `${h}小时${m}分`;if(m)return `${m}分${s}秒`;return `${s}秒`;};
 	const onGlobalKeydown=(event)=>{if(event.key==='Escape'){showDeviceDetailModal.value=false;showAssetModal.value=false;showSettingsModal.value=false;closeBulkDeleteConfirm();closeSnapshotRestore();return;}if(event.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)){event.preventDefault();searchInput.value?.focus();}};
 	onMounted(async()=>{document.addEventListener('keydown',onGlobalKeydown);if(adminToken.value){await refreshDashboard();try{weakAdminPassword.value=(await apiJson('/api/security-status',{headers:authHeaders()})).weak_admin_password;}catch(e){}}timer=setInterval(refreshDashboard,10000);clockTimer=setInterval(()=>nowTick.value=Date.now(),1000);});
-	onBeforeUnmount(()=>{document.removeEventListener('keydown',onGlobalKeydown);clearTimeout(searchDebounceTimer);if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);});
-		return {devices,summary,riskDevices,error,engineReady,stateCounts,offlineTop,adminToken,authRole,weakAdminPassword,showAuthModal,showSettingsModal,settingsTab,settings,settingsMsg,settingsErr,authError,adminUser,adminPass,restoreFile,isTriggering,isBulkUpdating,bulkMode,selectedDeviceIds,bulkGroupName,bulkProbeInterval,showBulkDeleteModal,bulkDeleteConfirmation,showSnapshotRestoreModal,snapshotRestoreRows,selectedSnapshotRows,isRestoringSnapshot,showAssetModal,showDeviceDetailModal,deviceDetail,maintenanceUntilLocal,maintenanceNote,assetTab,bulkText,assetForm,toast,selectedGroup,statusFilter,keyword,sortMode,viewMode,currentPage,pageSize,pageCount,visibleDevices,searchInput,logs,logLevel,logCategory,logKeyword,auditTimeline,auditKeyword,auditDeviceId,auditAction,deleteSnapshots,snapshotKeyword,snapshotOperator,snapshotStart,snapshotEnd,alerts,alertType,alertDeviceId,groupPolicies,policyForm,notificationChannels,groupRoutes,notificationDeliveries,channelForm,routeGroupName,routeChannelIds,deliveryStatus,deliveryChannelId,channelEndpointPlaceholder,groups,groupStats,filteredDevices,totalCount,onlineCount,offlineCount,unknownCount,pausedCount,statusText,auditActionText,probeTypeText,channelTypeText,deliveryKindText,deliverySummary,endpointPreview,trendMetrics,trendHeight,trendClass,metricTitle,displayStatus,statusBadgeName,deviceClass,isStale,showProbeCountdown,probeCountdownPercent,probeCountdownText,probeStripClass,formatTime,formatAge,formatDuration,loginAdmin,logoutAdmin,openSettings,triggerMonitorNow,toggleBulkMode,isDeviceSelected,toggleDeviceSelection,selectVisibleDevices,clearBulkSelection,handleDeviceCardClick,bulkPause,bulkStop,bulkUpdateGroup,bulkUpdateProbeInterval,openBulkDeleteConfirm,closeBulkDeleteConfirm,bulkDeleteDevices,openAssetModalForCreate,openAssetModalForEdit,saveSingleAsset,submitBulkImport,deleteDevice,toggleMonitoring,pauseMonitoring,enableMonitoring,stopMonitoring,pauseDetailDevice,enableDetailDevice,stopDetailDevice,editDetailDevice,deleteDetailDevice,openDeviceDetail,saveMaintenance,clearMaintenance,saveSettings,openPoliciesTab,loadPolicyForm,saveGroupPolicy,deleteGroupPolicy,openChannelsTab,resetChannelForm,loadChannelForm,saveNotificationChannel,testNotificationChannel,deleteNotificationChannel,loadRouteForm,saveGroupRoute,downloadBackup,downloadDevicesCsv,onRestoreFileChange,restoreBackup,fetchLogs,openLogsTab,fetchAuditTimeline,openAuditTab,fetchDeleteSnapshots,openSnapshotsTab,isDeletionSnapshot,downloadLogCsvSnapshot,openSnapshotRestore,closeSnapshotRestore,selectRestorableSnapshotRows,isSnapshotRowSelected,toggleSnapshotRow,restoreSelectedSnapshotRows,fetchAlerts,openAlertsTab,fetchNotificationDeliveries};
+	onBeforeUnmount(()=>{document.removeEventListener('keydown',onGlobalKeydown);clearTimeout(searchDebounceTimer);clearTimeout(toastTimer);if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);});
+		return {recycleBin,openRecycleTab,restoreRecycleEntry,devices,summary,riskDevices,error,engineReady,stateCounts,offlineTop,adminToken,authRole,weakAdminPassword,showAuthModal,showSettingsModal,settingsTab,settings,settingsMsg,settingsErr,authError,adminUser,adminPass,restoreFile,isTriggering,isBulkUpdating,bulkMode,selectedDeviceIds,bulkGroupName,bulkProbeInterval,showBulkDeleteModal,bulkDeleteConfirmation,showSnapshotRestoreModal,snapshotRestoreRows,selectedSnapshotRows,isRestoringSnapshot,showAssetModal,showDeviceDetailModal,deviceDetail,maintenanceUntilLocal,maintenanceNote,assetTab,bulkText,bulkPreview,previewBulkImport,downloadBulkTemplate,downloadBulkErrors,assetForm,toast,selectedGroup,statusFilter,keyword,sortMode,viewMode,currentPage,pageSize,pageCount,visibleDevices,searchInput,logs,logLevel,logCategory,logKeyword,auditTimeline,auditKeyword,auditDeviceId,auditAction,deleteSnapshots,snapshotKeyword,snapshotOperator,snapshotStart,snapshotEnd,alerts,alertType,alertDeviceId,groupPolicies,policyForm,notificationChannels,groupRoutes,notificationDeliveries,channelForm,routeGroupName,routeChannelIds,deliveryStatus,deliveryChannelId,channelEndpointPlaceholder,groups,groupStats,filteredDevices,totalCount,onlineCount,offlineCount,unknownCount,pausedCount,statusText,auditActionText,probeTypeText,channelTypeText,deliveryKindText,deliverySummary,endpointPreview,trendMetrics,trendHeight,trendClass,metricTitle,displayStatus,statusBadgeName,deviceClass,isStale,showProbeCountdown,probeCountdownPercent,probeCountdownText,probeStripClass,formatTime,formatAge,formatDuration,loginAdmin,logoutAdmin,openSettings,triggerMonitorNow,toggleBulkMode,isDeviceSelected,toggleDeviceSelection,selectVisibleDevices,clearBulkSelection,handleDeviceCardClick,bulkPause,bulkStop,bulkUpdateGroup,bulkUpdateProbeInterval,openBulkDeleteConfirm,closeBulkDeleteConfirm,bulkDeleteDevices,openAssetModalForCreate,openAssetModalForEdit,saveSingleAsset,submitBulkImport,deleteDevice,toggleMonitoring,pauseMonitoring,enableMonitoring,stopMonitoring,pauseDetailDevice,enableDetailDevice,stopDetailDevice,editDetailDevice,deleteDetailDevice,openDeviceDetail,saveMaintenance,clearMaintenance,saveSettings,openPoliciesTab,loadPolicyForm,saveGroupPolicy,deleteGroupPolicy,openChannelsTab,resetChannelForm,loadChannelForm,saveNotificationChannel,testNotificationChannel,deleteNotificationChannel,loadRouteForm,saveGroupRoute,downloadBackup,downloadDevicesCsv,onRestoreFileChange,restoreBackup,fetchLogs,openLogsTab,fetchAuditTimeline,openAuditTab,fetchDeleteSnapshots,openSnapshotsTab,isDeletionSnapshot,downloadLogCsvSnapshot,openSnapshotRestore,closeSnapshotRestore,selectRestorableSnapshotRows,isSnapshotRowSelected,toggleSnapshotRow,restoreSelectedSnapshotRows,fetchAlerts,openAlertsTab,fetchNotificationDeliveries};
 }
 }).mount('#app');
 </script>

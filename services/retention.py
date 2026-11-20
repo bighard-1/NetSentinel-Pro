@@ -7,7 +7,7 @@ from sqlalchemy import delete, func, select
 
 from database import SessionLocal
 from logging_service import log_event
-from models import AlertLog, AlertOutbox, NotificationDelivery, ProbeMetric, SystemLog
+from models import AlertLog, AlertOutbox, NotificationDelivery, ProbeMetric, RecycleBinEntry, SystemLog
 from services.config import load_config
 
 
@@ -57,5 +57,12 @@ async def cleanup_history() -> dict[str, int]:
             if batch_count < BATCH_SIZE:
                 break
         deleted[model.__tablename__] = total
+    recycle_total = 0
+    while True:
+        batch_count = await asyncio.to_thread(_delete_batch, RecycleBinEntry, "expires_at", now)
+        recycle_total += batch_count
+        if batch_count < BATCH_SIZE:
+            break
+    deleted[RecycleBinEntry.__tablename__] = recycle_total
     log_event(category="retention", message=f"历史数据清理完成: {deleted}")
     return deleted

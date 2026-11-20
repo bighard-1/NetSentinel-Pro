@@ -30,6 +30,7 @@ class AppSettings(BaseSettings):
     notification_delivery_retention_days: int = Field(default=30, ge=1)
     alert_outbox_retention_days: int = Field(default=90, ge=1)
     backup_retention_count: int = Field(default=10, ge=1, le=1000)
+    recycle_bin_retention_days: int = Field(default=7, ge=1, le=365)
     http_verify_tls: bool = True
     http_follow_redirects: bool = False
     http_user_agent: str = "NetSentinel-Pro/1.0"
@@ -57,6 +58,7 @@ class AppSettings(BaseSettings):
             "probe_concurrency": self.probe_concurrency,
             "alert_retention_days": self.alert_retention_days,
             "backup_retention_count": self.backup_retention_count,
+            "recycle_bin_retention_days": self.recycle_bin_retention_days,
             "http_verify_tls": self.http_verify_tls,
             "enable_docs": self.enable_docs,
             "allow_private_webhook": self.allow_private_webhook,
