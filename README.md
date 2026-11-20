@@ -113,6 +113,13 @@ ALERT_RETENTION_DAYS=90
 PROBE_METRIC_RETENTION_DAYS=14
 SYSTEM_LOG_RETENTION_DAYS=30
 NOTIFICATION_DELIVERY_RETENTION_DAYS=30
+ALERT_OUTBOX_RETENTION_DAYS=90
+PROBE_CONCURRENCY=50
+HTTP_VERIFY_TLS=true
+HTTP_FOLLOW_REDIRECTS=false
+HTTP_USER_AGENT=NetSentinel-Pro/1.0
+ALERT_BATCH_INTERVAL_SECONDS=5
+ALERT_STORM_THRESHOLD=3
 ```
 
 邮件通知配置：
@@ -158,6 +165,10 @@ data/backups/
 ```
 
 启动时会检查数据库迁移版本。需要升级旧库时，系统先在 `data/backups/` 创建通过完整性检查的在线备份，然后应用 Alembic 迁移。若迁移失败，应停止服务、保留原库与升级前备份，再从备份恢复。`GET /health/ready` 会检查后台任务、监控心跳与数据库连接；容器健康检查使用此接口。
+
+恢复上传时系统会先暂停后台监控与通知，备份当前库，验证上传库，再原子替换并迁移；恢复失败会用恢复前备份回滚。状态事件与待发送告警在同一事务提交；通知逐渠道记录成功结果，失败按指数退避最多尝试 5 次，超出后标记为 `DEAD` 以供排查。`ALERT_BATCH_INTERVAL_SECONDS` 控制告警汇总窗口，单组离线事件达到 `ALERT_STORM_THRESHOLD` 后发送合并通知。
+
+1000 台模拟设备的 P1 压测结果见 [压测报告](docs/benchmarks/p1-1000-devices.md)。
 
 ## 构建 x86 Docker 镜像
 

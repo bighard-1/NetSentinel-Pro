@@ -35,10 +35,15 @@ def backup_before_upgrade() -> Path | None:
     if _current_revision() == ScriptDirectory.from_config(config).get_current_head():
         return None
 
+    return create_database_backup("monitor-pre-upgrade")
+
+
+def create_database_backup(prefix: str) -> Path:
+    """Copy a live SQLite database, including committed WAL transactions."""
     backup_dir = DB_DIR / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    backup_path = backup_dir / f"monitor-pre-upgrade-{timestamp}.db"
+    backup_path = backup_dir / f"{prefix}-{timestamp}.db"
     try:
         with closing(sqlite3.connect(DB_FILE.resolve().as_uri() + "?mode=ro", uri=True)) as source:
             with closing(sqlite3.connect(backup_path)) as backup:

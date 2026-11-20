@@ -30,6 +30,7 @@ class DeviceOut(BaseModel):
     latest_probe_time: datetime | None
     next_probe_due_at: datetime | None
     probe_interval_seconds: int
+    probe_retry_count: int = 0
     last_success_at: datetime | None = None
     last_error: str = ""
     success_streak: int = 0
@@ -120,6 +121,7 @@ def as_device_out(
         latest_probe_time=latest_probe_time,
         next_probe_due_at=next_probe_due_at,
         probe_interval_seconds=probe_interval_seconds,
+        probe_retry_count=device.probe_retry_count or 0,
         last_success_at=device.last_success_at,
         last_error=device.last_error or "",
         success_streak=device.success_streak or 0,

@@ -1,21 +1,30 @@
 import asyncio
 import contextlib
+import os
 import platform
+import re
+import socket
+import ssl
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
-from alert import enqueue_alert_event
 from database import SessionLocal
 from logging_service import log_event, logger
-from models import AlertLog, Device, EventType, GroupPolicy, MonitoringState, ProbeMetric, ProbeType, SystemSetting
+from models import AlertLog, AlertOutbox, Device, EventType, GroupPolicy, MonitoringState, ProbeMetric, ProbeType, SystemSetting
 
 DEFAULT_MONITOR_INTERVAL_SECONDS = 30
 DEFAULT_OFFLINE_THRESHOLD = 3
 DEFAULT_ONLINE_THRESHOLD = 2
+PROBE_CONCURRENCY = max(1, int(os.getenv("PROBE_CONCURRENCY", "50")))
+
+
+class ProbeInfrastructureError(RuntimeError):
+    """The local probe tool cannot run; target status must not change."""
 
 
 @dataclass
@@ -50,6 +59,39 @@ class MonitorHealth:
 
 
 monitor_health = MonitorHealth()
+_http_client: httpx.AsyncClient | None = None
+
+
+async def start_http_client() -> None:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            verify=os.getenv("HTTP_VERIFY_TLS", "true").lower() != "false",
+            follow_redirects=os.getenv("HTTP_FOLLOW_REDIRECTS", "false").lower() == "true",
+            headers={"User-Agent": os.getenv("HTTP_USER_AGENT", "NetSentinel-Pro/1.0")},
+        )
+
+
+async def close_http_client() -> None:
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+
+
+def _http_error(exc: Exception) -> str:
+    if isinstance(exc, httpx.TimeoutException):
+        return "HTTP connection timeout" if isinstance(exc, httpx.ConnectTimeout) else "HTTP response timeout"
+    cause = exc
+    while cause is not None:
+        if isinstance(cause, socket.gaierror):
+            return f"DNS lookup failed: {cause}"
+        if isinstance(cause, ssl.SSLError):
+            return f"TLS verification failed: {cause}"
+        cause = cause.__cause__
+    if isinstance(exc, httpx.ConnectError):
+        return f"HTTP connection failed: {exc}"
+    return str(exc)
 
 
 async def ping(ip_address: str, timeout_seconds: int = 2) -> ProbeResult:
@@ -60,19 +102,28 @@ async def ping(ip_address: str, timeout_seconds: int = 2) -> ProbeResult:
     timeout_value = str(int(timeout_seconds * 1000)) if is_windows or system == "darwin" else str(timeout_seconds)
 
     started_at = time.perf_counter()
-    process = await asyncio.create_subprocess_exec(
-        "ping",
-        count_flag,
-        "1",
-        timeout_flag,
-        timeout_value,
-        ip_address,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    return_code = await process.wait()
-    latency_ms = max(1, int((time.perf_counter() - started_at) * 1000))
-    return ProbeResult(success=return_code == 0, latency_ms=latency_ms, error="" if return_code == 0 else "ICMP probe failed")
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "ping", count_flag, "1", timeout_flag, timeout_value, ip_address,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+    except (FileNotFoundError, PermissionError) as exc:
+        raise ProbeInfrastructureError(f"ICMP command unavailable: {exc}") from exc
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds + 1)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        await process.communicate()
+        return ProbeResult(success=False, error="ICMP timeout")
+    error_text = stderr.decode(errors="replace")[:200].strip()
+    if any(word in error_text.lower() for word in ("permission denied", "operation not permitted")):
+        raise ProbeInfrastructureError(f"ICMP permission error: {error_text}")
+    output = stdout.decode(errors="replace")
+    match = re.search(r"\btime[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*ms\b", output)
+    latency_ms = max(1, round(float(match.group(1)))) if match else max(1, int((time.perf_counter() - started_at) * 1000))
+    return ProbeResult(success=process.returncode == 0, latency_ms=latency_ms,
+                       error="" if process.returncode == 0 else (error_text or "ICMP target unreachable"))
 
 
 async def probe_tcp(host: str, port: int, timeout_seconds: int = 3) -> ProbeResult:
@@ -105,8 +156,15 @@ async def probe_http(device: Device, timeout_seconds: int = 5) -> ProbeResult:
     url = _http_url(device)
     started_at = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=False) as client:
-            response = await client.get(url)
+        if _http_client is None:
+            async with httpx.AsyncClient(
+                verify=os.getenv("HTTP_VERIFY_TLS", "true").lower() != "false",
+                follow_redirects=os.getenv("HTTP_FOLLOW_REDIRECTS", "false").lower() == "true",
+                headers={"User-Agent": os.getenv("HTTP_USER_AGENT", "NetSentinel-Pro/1.0")},
+            ) as client:
+                response = await client.get(url, timeout=timeout_seconds)
+        else:
+            response = await _http_client.get(url, timeout=timeout_seconds)
         latency_ms = max(1, int((time.perf_counter() - started_at) * 1000))
         expected_status = device.expected_status
         success = 200 <= response.status_code < 400 if expected_status is None else response.status_code == expected_status
@@ -118,7 +176,7 @@ async def probe_http(device: Device, timeout_seconds: int = 5) -> ProbeResult:
         )
     except Exception as exc:
         latency_ms = max(1, int((time.perf_counter() - started_at) * 1000))
-        return ProbeResult(success=False, latency_ms=latency_ms, error=str(exc)[:500])
+        return ProbeResult(success=False, latency_ms=latency_ms, error=_http_error(exc)[:500])
 
 
 async def probe_device(device: Device) -> ProbeResult:
@@ -194,7 +252,7 @@ def _wake_interval(devices: list[Device], default_interval: int) -> int:
     return max(1, min([default_interval, *intervals]))
 
 
-def _record_probe_metric(
+def _record_probe_metric_once(
     device: Device,
     result: ProbeResult,
     checked_at: datetime,
@@ -244,19 +302,29 @@ def _record_probe_metric(
             if current.failure_streak >= offline_threshold and previous_status != EventType.OFFLINE:
                 next_status = EventType.OFFLINE
 
+        in_maintenance = current.maintenance_until is not None and _as_utc(current.maintenance_until) > checked_at
         if next_status is not None:
             current.current_status = next_status
             current.status_since = checked_at
-            session.add(
-                AlertLog(
-                    device_id=current.id,
-                    event_type=next_status,
-                    event_time=checked_at,
-                    duration_seconds=duration_seconds,
-                )
+            event = AlertLog(
+                device_id=current.id,
+                event_type=next_status,
+                event_time=checked_at,
+                duration_seconds=duration_seconds,
             )
+            session.add(event)
+            session.flush()
+            if not in_maintenance:
+                session.add(AlertOutbox(
+                    alert_log_id=event.id,
+                    device_id=current.id,
+                    device_name=current.name,
+                    ip_address=current.ip_address,
+                    group_name=current.group_name,
+                    status=next_status.value,
+                    event_time=checked_at,
+                ))
 
-        in_maintenance = current.maintenance_until is not None and _as_utc(current.maintenance_until) > checked_at
         committed = CommittedProbe(
             device_id=current.id,
             device_name=current.name,
@@ -270,20 +338,29 @@ def _record_probe_metric(
         return committed
 
 
+def _record_probe_metric(
+    device: Device,
+    result: ProbeResult,
+    checked_at: datetime,
+    offline_threshold: int,
+    online_threshold: int,
+) -> CommittedProbe | None:
+    for attempt in range(3):
+        try:
+            return _record_probe_metric_once(device, result, checked_at, offline_threshold, online_threshold)
+        except OperationalError as exc:
+            if "database is locked" not in str(exc).lower() or attempt == 2:
+                raise
+            time.sleep(0.05 * (2 ** attempt))
+    raise AssertionError("unreachable")
+
+
 def _record_status_change(
     *,
     committed: CommittedProbe,
     event_type: EventType,
     event_time: datetime,
 ) -> None:
-    if not committed.in_maintenance:
-        enqueue_alert_event(
-            committed.device_name,
-            committed.ip_address,
-            committed.group_name,
-            event_type.value,
-            event_time,
-        )
     if event_type == EventType.ONLINE:
         message = f"{committed.device_name} ({committed.ip_address}) 已确认在线"
         if committed.duration_seconds > 0:
@@ -319,9 +396,25 @@ async def _monitor_round(force_probe: bool) -> tuple[int, int, int, list[Device]
 
     latest_probe_map = {device.id: device.last_checked_at for device in devices if device.last_checked_at is not None}
     due_devices = _due_devices(devices, latest_probe_map, monitor_interval, _now_utc(), force_probe)
-    probe_results = await asyncio.gather(*(probe_device(device) for device in due_devices), return_exceptions=True)
+    semaphore = asyncio.Semaphore(PROBE_CONCURRENCY)
+
+    async def limited_probe(device: Device) -> ProbeResult:
+        async with semaphore:
+            result = await probe_device(device)
+            for _ in range(max(0, min(2, device.probe_retry_count or 0))):
+                if result.success:
+                    break
+                await asyncio.sleep(0.2)
+                result = await probe_device(device)
+            return result
+
+    probe_results = await asyncio.gather(*(limited_probe(device) for device in due_devices), return_exceptions=True)
     failed_probes = 0
+    infrastructure_errors: list[ProbeInfrastructureError] = []
     for device, result in zip(due_devices, probe_results):
+        if isinstance(result, ProbeInfrastructureError):
+            infrastructure_errors.append(result)
+            continue
         if isinstance(result, ProbeResult):
             probe_result = result
         else:
@@ -347,6 +440,8 @@ async def _monitor_round(force_probe: bool) -> tuple[int, int, int, list[Device]
                 event_type=committed.event_type,
                 event_time=checked_at,
             )
+    if infrastructure_errors:
+        raise infrastructure_errors[0]
     return monitor_interval, len(due_devices), failed_probes, devices
 
 
@@ -397,6 +492,8 @@ async def monitor_loop(stop_event: asyncio.Event, trigger_event: asyncio.Event |
             monitor_health.probed_devices = probed
             monitor_health.failed_probes = failed
             monitor_health.round_duration_seconds = time.perf_counter() - started
+            if monitor_health.round_duration_seconds > interval:
+                logger.warning("monitor round exceeded interval: %.2fs > %ds", monitor_health.round_duration_seconds, interval)
             monitor_health.last_error = ""
             force_probe = False
             backoff_seconds = 1
@@ -414,6 +511,13 @@ async def monitor_loop(stop_event: asyncio.Event, trigger_event: asyncio.Event |
 async def shutdown_monitor_task(task: asyncio.Task | None) -> None:
     if task is None:
         return
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=15)
+    except asyncio.TimeoutError:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.exception("background task failed during shutdown")

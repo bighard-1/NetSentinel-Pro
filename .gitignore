@@ -3,6 +3,8 @@
 .venv/
 .pytest_cache/
 .test-p0-*/
+.test-p1-*/
+.bench-p1-*/
 .env
 data/*.db
 data/*.tmp

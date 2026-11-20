@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -48,6 +48,7 @@ class Device(Base):
     probe_path: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     expected_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     probe_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    probe_retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     current_status: Mapped[EventType | None] = mapped_column(Enum(EventType), nullable=True)
     status_since: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_checked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -65,6 +66,7 @@ class Device(Base):
 
 class AlertLog(Base):
     __tablename__ = "alert_logs"
+    __table_args__ = (Index("ix_alert_logs_device_id_id", "device_id", "id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -75,8 +77,28 @@ class AlertLog(Base):
     device: Mapped[Device] = relationship("Device", back_populates="alert_logs")
 
 
+class AlertOutbox(Base):
+    __tablename__ = "alert_outbox"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    alert_log_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    device_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    device_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    ip_address: Mapped[str] = mapped_column(String(253), nullable=False)
+    group_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    event_time: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False)
+    delivery_status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    channel_ids: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    delivered_channel_ids: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    last_error: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+
+
 class ProbeMetric(Base):
     __tablename__ = "probe_metrics"
+    __table_args__ = (Index("ix_probe_metrics_device_id_checked_at", "device_id", "checked_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=True, index=True)

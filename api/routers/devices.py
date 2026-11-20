@@ -37,6 +37,7 @@ class DeviceCreate(BaseModel):
     probe_path: str = Field(default="", max_length=500)
     expected_status: int | None = Field(default=None, ge=100, le=599)
     probe_interval_seconds: int | None = Field(default=None, ge=1, le=86400)
+    probe_retry_count: int = Field(default=0, ge=0, le=2)
 
     @field_validator("ip_address")
     @classmethod
@@ -53,6 +54,7 @@ class DeviceBulkUpdate(BaseModel):
     monitoring_state: MonitoringState | None = None
     group_name: str | None = Field(default=None, min_length=1, max_length=100)
     probe_interval_seconds: int | None = Field(default=None, ge=1, le=86400)
+    probe_retry_count: int | None = Field(default=None, ge=0, le=2)
 
 
 class DeviceBulkDelete(BaseModel):
@@ -75,6 +77,7 @@ class DeviceUpdate(BaseModel):
     probe_path: str | None = Field(default=None, max_length=500)
     expected_status: int | None = Field(default=None, ge=100, le=599)
     probe_interval_seconds: int | None = Field(default=None, ge=1, le=86400)
+    probe_retry_count: int | None = Field(default=None, ge=0, le=2)
 
     @field_validator("ip_address")
     @classmethod
@@ -712,6 +715,7 @@ def create_device(payload: DeviceCreate, operator: str = Depends(current_admin_s
             probe_path=payload.probe_path.strip(),
             expected_status=payload.expected_status,
             probe_interval_seconds=payload.probe_interval_seconds,
+            probe_retry_count=payload.probe_retry_count,
         )
         session.add(device)
         session.commit()
@@ -750,6 +754,7 @@ def create_devices_bulk(payload: DeviceBulkCreate, operator: str = Depends(curre
                     probe_path=item.probe_path.strip(),
                     expected_status=item.expected_status,
                     probe_interval_seconds=item.probe_interval_seconds,
+                    probe_retry_count=item.probe_retry_count,
                 )
             )
             imported += 1
@@ -785,6 +790,8 @@ def update_devices_bulk(payload: DeviceBulkUpdate, operator: str = Depends(curre
                 device.group_name = payload.group_name.strip() or "default"
             if "probe_interval_seconds" in payload.model_fields_set:
                 device.probe_interval_seconds = payload.probe_interval_seconds
+            if payload.probe_retry_count is not None:
+                device.probe_retry_count = payload.probe_retry_count
             updated += 1
         session.commit()
 
@@ -886,6 +893,8 @@ def update_device(device_id: int, payload: DeviceUpdate, operator: str = Depends
             device.is_monitoring = payload.monitoring_state == MonitoringState.ACTIVE
         if "probe_interval_seconds" in payload.model_fields_set:
             device.probe_interval_seconds = payload.probe_interval_seconds
+        if payload.probe_retry_count is not None:
+            device.probe_retry_count = payload.probe_retry_count
         probe_type = payload.probe_type if payload.probe_type is not None else device.probe_type
         provided_fields = payload.model_fields_set
         if probe_type == ProbeType.TCP:

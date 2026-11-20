@@ -22,7 +22,7 @@ from api.routers.notifications import router as notifications_router
 from api.routers.settings import router as settings_router
 from auth import create_admin_token, is_admin_configured, verify_admin_credentials
 from database import Base, engine
-from engine import monitor_health, monitor_loop, shutdown_monitor_task
+from engine import close_http_client, monitor_health, monitor_loop, shutdown_monitor_task, start_http_client
 from logging_service import configure_logging, log_event
 from services.report_scheduler import schedule_weekly_report_job
 from services.migrations import backup_before_upgrade, upgrade_schema
@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI):
     if backup_path is not None:
         log_event(category="backup", message=f"升级前数据库备份已创建: {backup_path}")
     log_event(category="system", message="NetSentinel 服务启动")
+    await start_http_client()
 
     app.state.monitor_stop_event = asyncio.Event()
     app.state.monitor_trigger_event = asyncio.Event()
@@ -116,6 +117,7 @@ async def lifespan(app: FastAPI):
     await shutdown_monitor_task(app.state.monitor_task)
     await shutdown_monitor_task(app.state.alert_task)
     app.state.scheduler.shutdown(wait=False)
+    await close_http_client()
 
 
 app = FastAPI(title="NetSentinel Pro", lifespan=lifespan)

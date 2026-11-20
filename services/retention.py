@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select
 
 from database import SessionLocal
 from logging_service import log_event
-from models import AlertLog, NotificationDelivery, ProbeMetric, SystemLog
+from models import AlertLog, AlertOutbox, NotificationDelivery, ProbeMetric, SystemLog
 
 
 BATCH_SIZE = 5000
@@ -17,6 +17,7 @@ RETENTION_DAYS = (
     (ProbeMetric, "checked_at", "PROBE_METRIC_RETENTION_DAYS", 14),
     (SystemLog, "created_at", "SYSTEM_LOG_RETENTION_DAYS", 30),
     (NotificationDelivery, "created_at", "NOTIFICATION_DELIVERY_RETENTION_DAYS", 30),
+    (AlertOutbox, "event_time", "ALERT_OUTBOX_RETENTION_DAYS", 90),
 )
 
 
@@ -39,6 +40,8 @@ def _delete_batch(model, time_column: str, cutoff: datetime) -> int:
             statement = statement.where(SystemLog.details.not_like("%CSV_SNAPSHOT_START%"))
         elif model is NotificationDelivery:
             statement = statement.where(NotificationDelivery.status != "PENDING")
+        elif model is AlertOutbox:
+            statement = statement.where(AlertOutbox.delivery_status != "PENDING")
 
         ids = session.execute(statement).scalars().all()
         if not ids:
