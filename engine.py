@@ -318,6 +318,8 @@ def _record_probe_metric_once(
                     group_name=current.group_name,
                     status=next_status.value,
                     event_time=checked_at,
+                    duration_seconds=duration_seconds,
+                    failure_reason=result.error[:1000] if next_status == EventType.OFFLINE else "",
                 ))
 
         committed = CommittedProbe(
@@ -377,7 +379,7 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-async def _monitor_round(force_probe: bool) -> tuple[int, int, int, list[Device]]:
+async def _monitor_round(force_probe: bool, target_ids: set[int] | None = None) -> tuple[int, int, int, list[Device]]:
     monitor_interval, default_offline_threshold, default_online_threshold, policy_map = await asyncio.to_thread(
         _load_runtime_settings
     )
@@ -388,6 +390,9 @@ async def _monitor_round(force_probe: bool) -> tuple[int, int, int, list[Device]
                 Device.monitoring_state == MonitoringState.ACTIVE,
             )
         ).scalars().all()
+
+    if target_ids:
+        devices = [device for device in devices if device.id in target_ids]
 
     latest_probe_map = {device.id: device.last_checked_at for device in devices if device.last_checked_at is not None}
     due_devices = _due_devices(devices, latest_probe_map, monitor_interval, _now_utc(), force_probe)
@@ -471,7 +476,8 @@ async def _wait_for_next_round(
     return False
 
 
-async def monitor_loop(stop_event: asyncio.Event, trigger_event: asyncio.Event | None = None) -> None:
+async def monitor_loop(stop_event: asyncio.Event, trigger_event: asyncio.Event | None = None,
+                       target_ids: set[int] | None = None) -> None:
     log_event(category="monitor", message="监控引擎已启动")
     monitor_health.started_at = _now_utc()
     monitor_health.completed_at = None
@@ -481,7 +487,13 @@ async def monitor_loop(stop_event: asyncio.Event, trigger_event: asyncio.Event |
     while not stop_event.is_set():
         started = time.perf_counter()
         try:
-            interval, probed, failed, devices = await _monitor_round(force_probe)
+            requested_ids = set(target_ids) if force_probe and target_ids else None
+            if requested_ids is not None:
+                target_ids.clear()
+            if requested_ids is None:
+                interval, probed, failed, devices = await _monitor_round(force_probe)
+            else:
+                interval, probed, failed, devices = await _monitor_round(force_probe, requested_ids)
             monitor_health.completed_at = _now_utc()
             monitor_health.expected_interval_seconds = interval
             monitor_health.probed_devices = probed

@@ -33,6 +33,14 @@ class AlertEvent:
     group_name: str
     status: str
     event_time: datetime
+    device_id: int | None = None
+    duration_seconds: int = 0
+    failure_reason: str = ""
+
+
+def _device_link(device_id: int | None) -> str:
+    base = load_config().public_base_url.strip().rstrip("/")
+    return f"{base}/#device={device_id}" if base and device_id else ""
 
 
 @dataclass
@@ -156,6 +164,9 @@ async def send_feishu_card(
     status: str,
     event_time: datetime,
     group_name: str = "",
+    device_id: int | None = None,
+    duration_seconds: int = 0,
+    failure_reason: str = "",
 ) -> bool:
     webhook = _resolve_feishu_webhook(group_name)
     if not webhook:
@@ -166,6 +177,11 @@ async def send_feishu_card(
     status_text = "恢复上线" if is_recovery else "宕机离线"
     event_time_text = event_time.astimezone(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
+    details = (f"\n**离线持续**: {duration_seconds} 秒" if is_recovery and duration_seconds else
+               f"\n**失败原因**: {failure_reason}" if failure_reason else "")
+    link = _device_link(device_id)
+    if link:
+        details += f"\n**控制台**: {link}"
     payload = {
         "msg_type": "interactive",
         "card": {
@@ -180,7 +196,8 @@ async def send_feishu_card(
                         f"**设备名**: {device_name}\n"
                         f"**IP**: `{ip_address}`\n"
                         f"**状态**: **{status}**\n"
-                        f"**时间**: {event_time_text}"
+                        f"**分组**: {group_name}\n"
+                        f"**时间**: {event_time_text}{details}"
                     ),
                 }
             ],
@@ -193,13 +210,18 @@ async def send_feishu_card(
 def _event_markdown(event: AlertEvent) -> str:
     status_text = "恢复上线" if event.status.upper() == "ONLINE" else "宕机离线"
     event_time_text = event.event_time.astimezone(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    details = (f"\n- 离线持续：{event.duration_seconds} 秒" if event.status.upper() == "ONLINE" and event.duration_seconds else
+               f"\n- 失败原因：{event.failure_reason}" if event.failure_reason else "")
+    link = _device_link(event.device_id)
+    if link:
+        details += f"\n- 控制台：{link}"
     return (
         f"### NetSentinel 设备状态变更\n"
         f"- 分组：{event.group_name}\n"
         f"- 设备：{event.device_name}\n"
         f"- IP：`{event.ip_address}`\n"
         f"- 状态：**{status_text}**\n"
-        f"- 时间：{event_time_text}"
+        f"- 时间：{event_time_text}{details}"
     )
 
 
@@ -207,7 +229,11 @@ def _summary_markdown(events: list[AlertEvent], group_name: str) -> str:
     lines = []
     for event in events:
         status_text = "恢复" if event.status.upper() == "ONLINE" else "宕机"
-        lines.append(f"- {event.device_name} (`{event.ip_address}`): {status_text}")
+        detail = (f"，离线 {event.duration_seconds} 秒" if event.status.upper() == "ONLINE" and event.duration_seconds else
+                  f"，原因：{event.failure_reason}" if event.failure_reason else "")
+        link = _device_link(event.device_id)
+        lines.append(f"- {event.device_name} (`{event.ip_address}`): {status_text}{detail}"
+                     + (f"，[控制台]({link})" if link else ""))
     return (
         f"### NetSentinel 大面积网络波动\n"
         f"分组：{group_name}\n\n"
@@ -428,7 +454,11 @@ async def _send_feishu_summary_card(events: list[AlertEvent], group_name: str) -
     lines: list[str] = []
     for event in events:
         status_text = "恢复" if event.status.upper() == "ONLINE" else "宕机"
-        lines.append(f"- {event.device_name} (`{event.ip_address}`): {status_text}")
+        detail = (f"，离线 {event.duration_seconds} 秒" if event.status.upper() == "ONLINE" and event.duration_seconds else
+                  f"，原因：{event.failure_reason}" if event.failure_reason else "")
+        link = _device_link(event.device_id)
+        lines.append(f"- {event.device_name} (`{event.ip_address}`): {status_text}{detail}"
+                     + (f"，[控制台]({link})" if link else ""))
 
     payload = {
         "msg_type": "interactive",
@@ -515,7 +545,8 @@ def _update_outbox(outbox_id: int, *, status: str | None = None, error: str = ""
 
 
 async def _dispatch_outbox_item(item: AlertOutbox) -> None:
-    event = AlertEvent(item.device_name, item.ip_address, item.group_name, item.status, item.event_time)
+    event = AlertEvent(item.device_name, item.ip_address, item.group_name, item.status, item.event_time,
+                       item.device_id, item.duration_seconds, item.failure_reason)
     if _is_in_silence_window(item.group_name):
         await asyncio.to_thread(_update_outbox, item.id, status="SUPPRESSED")
         return
@@ -541,6 +572,8 @@ async def _dispatch_outbox_item(item: AlertOutbox) -> None:
             success = await send_feishu_card(
                 device_name=event.device_name, ip_address=event.ip_address,
                 group_name=event.group_name, status=event.status, event_time=event.event_time,
+                device_id=event.device_id, duration_seconds=event.duration_seconds,
+                failure_reason=event.failure_reason,
             )
         else:
             with SessionLocal() as session:
@@ -596,7 +629,8 @@ async def _dispatch_outbox_summary(items: list[AlertOutbox]) -> None:
         waiting = [item for item in items if target in targets_by_item.get(item.id, []) and target not in delivered[item.id]]
         if not waiting:
             continue
-        waiting_events = [AlertEvent(item.device_name, item.ip_address, item.group_name, item.status, item.event_time)
+        waiting_events = [AlertEvent(item.device_name, item.ip_address, item.group_name, item.status, item.event_time,
+                                     item.device_id, item.duration_seconds, item.failure_reason)
                           for item in waiting]
         if target == "default":
             success = await _send_feishu_summary_card(waiting_events, group_name)

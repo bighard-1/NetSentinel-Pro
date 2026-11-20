@@ -118,8 +118,11 @@ async def lifespan(app: FastAPI):
 
     app.state.monitor_stop_event = asyncio.Event()
     app.state.monitor_trigger_event = asyncio.Event()
+    app.state.monitor_target_ids = set()
+    app.state.last_device_trigger_ts = {}
     app.state.monitor_task = asyncio.create_task(
-        monitor_loop(app.state.monitor_stop_event, app.state.monitor_trigger_event)
+        monitor_loop(app.state.monitor_stop_event, app.state.monitor_trigger_event,
+                     app.state.monitor_target_ids)
     )
     app.state.last_manual_trigger_ts = 0.0
 

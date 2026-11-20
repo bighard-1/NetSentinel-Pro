@@ -105,6 +105,8 @@ class AlertOutbox(Base):
     group_name: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     event_time: Mapped[DateTime] = mapped_column(UTCDateTime(), nullable=False)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failure_reason: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
     delivery_status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", index=True)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_attempt_at: Mapped[DateTime] = mapped_column(UTCDateTime(), nullable=False, server_default=func.now(), index=True)

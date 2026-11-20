@@ -1,11 +1,12 @@
 import csv
 import io
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import case, delete, desc, func, select
 
 from api.dependencies import current_admin_subject, verify_admin_token
 from database import DB_DIR, SessionLocal
@@ -118,6 +119,8 @@ class DeviceDetailOut(BaseModel):
     probe_metrics: list["ProbeMetricOut"]
     latency_avg_ms_24h: float | None
     packet_loss_percent_24h: float
+    trend_24h: list["ProbeTrendBucketOut"] = []
+    trend_7d: list["ProbeTrendBucketOut"] = []
 
 
 class ProbeMetricOut(BaseModel):
@@ -128,6 +131,14 @@ class ProbeMetricOut(BaseModel):
     http_status: int | None
     error: str
     checked_at: datetime
+
+
+class ProbeTrendBucketOut(BaseModel):
+    bucket: str
+    total: int
+    successes: int
+    success_percent: float
+    latency_avg_ms: float | None
 
 
 class DeletedSnapshotDeviceOut(BaseModel):
@@ -204,6 +215,21 @@ def _probe_metric_out(metric: ProbeMetric) -> ProbeMetricOut:
         error=metric.error,
         checked_at=metric.checked_at,
     )
+
+
+def _probe_trend(session, device_id: int, since: datetime, bucket_format: str) -> list[ProbeTrendBucketOut]:
+    bucket = func.strftime(bucket_format, ProbeMetric.checked_at)
+    rows = session.execute(
+        select(bucket.label("bucket"), func.count(ProbeMetric.id),
+               func.sum(case((ProbeMetric.success.is_(True), 1), else_=0)),
+               func.avg(case((ProbeMetric.success.is_(True), ProbeMetric.latency_ms), else_=None)))
+        .where(ProbeMetric.device_id == device_id, ProbeMetric.checked_at >= since)
+        .group_by(bucket).order_by(bucket)
+    ).all()
+    return [ProbeTrendBucketOut(bucket=period, total=int(total), successes=int(successes or 0),
+                                success_percent=round(100 * (successes or 0) / total, 1),
+                                latency_avg_ms=round(average, 1) if average is not None else None)
+            for period, total, successes, average in rows]
 
 
 def _device_out(device: Device) -> DeviceOut:
@@ -777,7 +803,31 @@ def get_device_detail(device_id: int, _: None = Depends(verify_admin_token)) -> 
             probe_metrics=[_probe_metric_out(metric) for metric in metric_rows],
             latency_avg_ms_24h=latency_avg,
             packet_loss_percent_24h=packet_loss,
+            trend_24h=_probe_trend(session, device_id, since_24h, "%Y-%m-%dT%H:00:00"),
+            trend_7d=_probe_trend(session, device_id, since_7d, "%Y-%m-%d"),
         )
+
+
+@router.post("/{device_id}/probe")
+def trigger_device_probe(device_id: int, request: Request,
+                         operator: str = Depends(current_admin_subject)) -> dict[str, str]:
+    with SessionLocal() as session:
+        device = session.get(Device, device_id)
+        if device is None:
+            raise HTTPException(status_code=404, detail="Device not found")
+        if not device.is_monitoring or device.monitoring_state != MonitoringState.ACTIVE:
+            raise HTTPException(status_code=409, detail="请先启用该设备的监控")
+        device_name = device.name
+    now = time.monotonic()
+    last = request.app.state.last_device_trigger_ts.get(device_id, 0.0)
+    if now - last < 5:
+        raise HTTPException(status_code=429, detail="探测过于频繁，请稍后重试")
+    request.app.state.last_device_trigger_ts[device_id] = now
+    request.app.state.monitor_target_ids.add(device_id)
+    request.app.state.monitor_trigger_event.set()
+    log_event(category="monitor", message=f"管理员触发单设备探测: {device_name}", device_id=device_id,
+              details=_audit_details(action="PROBE", operator=operator, device_id=device_id))
+    return {"status": "queued", "message": "设备探测已排队"}
 
 
 @router.put("/{device_id}/maintenance", response_model=DeviceOut)

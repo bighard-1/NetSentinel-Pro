@@ -35,6 +35,17 @@ with TestClient(app) as client:
         "monitoring_state": "PAUSED",
     })
     assert first.status_code == second.status_code == 200
+    assert client.post(f"/api/devices/{first.json()['id']}/probe", headers=headers).status_code == 409
+    active = client.put(f"/api/devices/{first.json()['id']}", headers=headers,
+                        json={"monitoring_state": "ACTIVE"})
+    assert active.status_code == 200, active.text
+    probe = client.post(f"/api/devices/{first.json()['id']}/probe", headers=headers)
+    assert probe.status_code == 200 and probe.json()["status"] == "queued", probe.text
+    assert client.post(f"/api/devices/{first.json()['id']}/probe", headers=headers).status_code == 429
+    detail = client.get(f"/api/devices/{first.json()['id']}/detail", headers=headers)
+    assert detail.status_code == 200, detail.text
+    assert isinstance(detail.json()["trend_24h"], list)
+    assert isinstance(detail.json()["trend_7d"], list)
 
     deleted = client.delete(f"/api/devices/{first.json()['id']}", headers=headers)
     assert deleted.status_code == 200, deleted.text

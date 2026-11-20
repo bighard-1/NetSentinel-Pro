@@ -89,8 +89,10 @@ async def _quiesce_background_jobs(request: Request) -> None:
 def _resume_background_jobs(request: Request) -> None:
     request.app.state.monitor_stop_event = asyncio.Event()
     request.app.state.monitor_trigger_event = asyncio.Event()
+    request.app.state.monitor_target_ids = set()
     request.app.state.monitor_task = asyncio.create_task(
-        monitor_loop(request.app.state.monitor_stop_event, request.app.state.monitor_trigger_event)
+        monitor_loop(request.app.state.monitor_stop_event, request.app.state.monitor_trigger_event,
+                     request.app.state.monitor_target_ids)
     )
     request.app.state.alert_stop_event = asyncio.Event()
     request.app.state.alert_task = asyncio.create_task(alert_dispatch_loop(request.app.state.alert_stop_event))

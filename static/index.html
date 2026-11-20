@@ -20,7 +20,7 @@
       --color-line-strong: #38516a;
       --color-text: #e8eef5;
       --color-muted: #91a2b5;
-      --color-faint: #607285;
+      --color-faint: #91a2b5;
       --color-accent: #58d8ff;
       --color-accent-2: #8cecff;
       --color-good: #3ee58f;
@@ -414,6 +414,14 @@
     }
     .toast.error { border-color: rgba(255,77,95,.7); color: #ffced4; }
     .toast .mini-btn { margin-left:10px; }
+    body.light { --color-bg:#eef3f8; --color-panel:#ffffff; --color-panel-2:#f5f9fc; --color-panel-3:#e7f2f9; --color-line:#b8ccda; --color-line-strong:#739bb2; --color-text:#152331; --color-muted:#40576b; --color-faint:#526779; --color-accent:#086c91; --color-accent-2:#075f80; --color-good:#087a47; --color-bad:#b91c32; --color-warn:#805500; background:#eef3f8; }
+    body.light .topbar, body.light .panel { background:rgba(255,255,255,.95); }
+    body.light .input, body.light .select, body.light .textarea { background:#fff; }
+    body.light .btn { background:#f5f9fc; }
+    body.wall-mode .topbar .actions .btn:not(.wall-toggle) { display:none; }
+    .connection-banner { margin-top:10px; padding:10px 14px; border:1px solid var(--color-bad); color:var(--color-text); border-radius:var(--radius); background:rgba(185,28,50,.18); }
+    .skeleton { min-height:155px; background:linear-gradient(90deg,var(--color-panel-2),var(--color-panel-3),var(--color-panel-2)); background-size:200% 100%; animation:shimmer 1.2s infinite; border-radius:var(--radius); }
+    @keyframes shimmer { to { background-position-x:-200%; } }
     @media (max-width: 1180px) {
       .overview { grid-template-columns:repeat(4,minmax(0,1fr)); }
       .layout > aside.panel .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -454,9 +462,12 @@
         <button v-if="adminToken && authRole === 'admin'" class="btn" :disabled="isTriggering" @click="triggerMonitorNow">{{ isTriggering ? '探测中' : '立即探测' }}</button>
         <button v-if="adminToken && authRole === 'admin'" class="btn" @click="toggleBulkMode">{{ bulkMode ? '退出批量' : '批量模式' }}</button>
         <button v-if="authRole === 'admin'" class="btn" @click="openSettings">控制台</button>
+        <button class="btn" @click="toggleTheme">{{ theme==='dark' ? '浅色' : '深色' }}</button>
+        <button class="btn wall-toggle" @click="toggleWallMode">{{ wallMode ? '退出大屏' : '大屏模式' }}</button>
         <button v-if="adminToken" class="btn" @click="logoutAdmin">退出</button>
       </div>
     </header>
+    <div v-if="!networkConnected" class="connection-banner" role="alert">连接中断，页面将自动重试。当前数据可能已过期。</div>
 
     <section class="overview" aria-label="监控状态概览" v-if="adminToken">
       <div class="overview-item"><small>在线</small><strong class="msg">● {{ stateCounts.online }}</strong></div>
@@ -553,6 +564,7 @@
         </div>
         <div v-if="error" class="err" style="padding: 12px;">{{ error }}</div>
         <div v-if="viewMode==='cards'" class="device-grid">
+          <div v-if="loadingDevices" v-for="slot in 6" :key="`skeleton-${slot}`" class="skeleton" aria-hidden="true"></div>
           <article v-for="device in visibleDevices" :key="device.id" class="device" :class="deviceClass(device)" @click="handleDeviceCardClick(device)" @keydown.enter="handleDeviceCardClick(device)" tabindex="0" :aria-label="`${device.name}，${displayStatus(device)}，${device.ip_address}`">
             <input v-if="bulkMode" class="bulk-select" type="checkbox" :checked="isDeviceSelected(device.id)" @click.stop="toggleDeviceSelection(device.id)" />
             <div class="probe-strip" :class="probeStripClass(device)" :title="probeCountdownText(device)" v-if="showProbeCountdown(device)">
@@ -575,7 +587,7 @@
               <span v-if="isStale(device)" class="stale-label">▲ 数据过期 · 最近探测 {{ formatTime(device.latest_probe_time) }}</span>
             </div>
           </article>
-          <div v-if="!filteredDevices.length" class="empty">{{ devices.length ? '没有匹配的设备，请调整筛选条件。' : '还没有监控目标。点击“添加设备”创建第一个目标。' }}</div>
+          <div v-if="!loadingDevices && !filteredDevices.length" class="empty">{{ devices.length ? '没有匹配的设备，请调整筛选条件。' : '还没有监控目标。点击“添加设备”创建第一个目标。' }}</div>
         </div>
         <div v-else class="table-wrap" style="margin:12px;">
           <table aria-label="监控目标表格"><thead><tr><th>设备</th><th>地址 / 探测</th><th>状态</th><th>状态持续</th><th>最近成功</th><th>失败原因</th></tr></thead>
@@ -642,12 +654,12 @@
     </section>
 
     <div v-if="showAuthModal" class="modal">
-      <div class="dialog small">
+      <div class="dialog small" role="dialog" aria-modal="true" aria-label="登录监控台">
         <div class="dialog-head">
           <h2 class="dialog-title">登录监控台</h2>
         </div>
         <div class="dialog-body">
-          <input v-model="adminUser" class="input" placeholder="管理员账号" />
+          <input v-model="adminUser" ref="loginInput" class="input" placeholder="管理员账号" aria-label="管理员账号" />
           <input v-model="adminPass" type="password" class="input" placeholder="管理员密码" />
           <p v-if="authError" class="err">{{ authError }}</p>
           <button class="btn primary" @click="loginAdmin">登录</button>
@@ -670,7 +682,7 @@
     </div>
 
     <div v-if="showSnapshotRestoreModal" class="modal">
-      <div class="dialog">
+      <div class="dialog" role="dialog" aria-modal="true" aria-label="从删除快照恢复">
         <div class="dialog-head">
           <h2 class="dialog-title">从删除快照恢复</h2>
           <button class="mini-btn" @click="closeSnapshotRestore">关</button>
@@ -772,6 +784,12 @@
           </div>
 
           <div v-else-if="settingsTab==='policies'" class="form-grid">
+            <div class="form-section" aria-label="策略继承关系">
+              <div class="section-title">生效策略：全局默认 → {{ policyForm.group_name || '所选分组' }}</div>
+              <div>掉线阈值：全局 {{ settings.offline_threshold }} 次 → <strong>{{ selectedPolicy ? `${selectedPolicy.offline_threshold} 次（分组覆盖）` : '继承全局' }}</strong></div>
+              <div>恢复阈值：全局 {{ settings.online_threshold }} 次 → <strong>{{ selectedPolicy ? `${selectedPolicy.online_threshold} 次（分组覆盖）` : '继承全局' }}</strong></div>
+              <div>通知：{{ selectedPolicy?.feishu_webhook ? '分组飞书配置' : '继承全局或渠道路由' }}</div>
+            </div>
             <div class="toolbar" style="padding:0;border:0;background:transparent;">
               <select v-model="policyForm.group_name" class="select" @change="loadPolicyForm(policyForm.group_name)">
                 <option value="">选择分组</option>
@@ -828,6 +846,7 @@
               <button class="btn" @click="resetChannelForm">新建</button>
               <button class="btn danger" :disabled="!channelForm.id" @click="deleteNotificationChannel">删除渠道</button>
             </div>
+            <p v-if="channelTestResult" :class="channelTestResult.success ? 'msg' : 'err'" role="status">{{ channelTestResult.message }}</p>
             <div class="toolbar" style="padding:0;border:0;background:transparent;">
               <select v-model="routeGroupName" class="select" @change="loadRouteForm(routeGroupName)">
                 <option value="">选择分组路由</option>
@@ -1005,7 +1024,7 @@
     </div>
 
     <div v-if="showAssetModal" class="modal">
-      <div class="dialog">
+      <div class="dialog" role="dialog" aria-modal="true" aria-label="资产管理">
         <div class="dialog-head">
           <h2 class="dialog-title">资产管理</h2>
           <button class="mini-btn" @click="showAssetModal=false">关</button>
@@ -1015,9 +1034,9 @@
             <button class="tab" :class="{active: assetTab==='single'}" @click="assetTab='single'">单个添加</button>
             <button class="tab" :class="{active: assetTab==='bulk'}" @click="assetTab='bulk'">批量导入</button>
           </div>
-          <div v-if="assetTab==='single'" class="form-grid">
-            <input v-model="assetForm.name" class="input" placeholder="设备名称" />
-            <input v-model="assetForm.ip_address" class="input" placeholder="IP地址或主机名" />
+          <div v-if="assetTab==='single'" class="form-grid" @input="assetShowValidation=true">
+            <label>设备名称<input v-model="assetForm.name" class="input" placeholder="设备名称" aria-label="设备名称" /><span v-if="assetShowValidation && assetFormErrors.name" class="err">{{ assetFormErrors.name }}</span></label>
+            <label>IP 地址或主机名<input v-model="assetForm.ip_address" class="input" placeholder="IP地址或主机名" aria-label="IP 地址或主机名" /><span v-if="assetShowValidation && assetFormErrors.ip_address" class="err">{{ assetFormErrors.ip_address }}</span></label>
             <input v-model="assetForm.group_name" class="input" placeholder="所属分组" />
             <select v-model="assetForm.probe_type" class="select">
               <option value="ICMP">ICMP Ping</option>
@@ -1025,9 +1044,11 @@
               <option value="HTTP">HTTP 状态码</option>
             </select>
             <input v-if="assetForm.probe_type==='TCP'" v-model.number="assetForm.probe_port" type="number" min="1" max="65535" class="input" placeholder="TCP端口，例如 22 / 80 / 443" />
+            <span v-if="assetShowValidation && assetFormErrors.probe_port" class="err">{{ assetFormErrors.probe_port }}</span>
             <input v-if="assetForm.probe_type==='HTTP'" v-model="assetForm.probe_path" class="input" placeholder="HTTP路径或完整URL，例如 /health 或 https://example.com/health" />
             <input v-if="assetForm.probe_type==='HTTP'" v-model.number="assetForm.expected_status" type="number" min="100" max="599" class="input" placeholder="期望状态码，留空表示 2xx/3xx 均视为成功" />
             <input v-model.number="assetForm.probe_interval_seconds" type="number" min="1" max="86400" class="input" placeholder="单设备探测周期秒数，留空跟随全局" />
+            <span v-if="assetShowValidation && assetFormErrors.probe_interval_seconds" class="err">{{ assetFormErrors.probe_interval_seconds }}</span>
             <select v-model="assetForm.monitoring_state" class="select">
               <option value="ACTIVE">启用监控</option>
               <option value="PAUSED">暂停监控</option>
@@ -1056,7 +1077,7 @@
     </div>
 
     <div v-if="showDeviceDetailModal" class="drawer-backdrop" @click.self="showDeviceDetailModal=false">
-      <aside class="drawer">
+      <aside class="drawer" role="dialog" aria-modal="true" aria-label="设备详情">
         <div class="drawer-head">
           <h2 class="dialog-title">设备详情</h2>
           <button class="mini-btn" @click="showDeviceDetailModal=false">关</button>
@@ -1080,6 +1101,7 @@
             <div class="detail-card"><span class="stat-label">探测周期</span><strong>{{ deviceDetail.device.probe_interval_seconds }}秒</strong></div>
           </div>
           <div v-if="adminToken && authRole === 'admin'" class="drawer-actions">
+            <button class="btn primary" :disabled="isTriggering" @click="probeDetailDevice">{{ isTriggering ? '探测中' : '立即探测此设备' }}</button>
             <button v-if="deviceDetail.device.monitoring_state==='ACTIVE'" class="btn" @click="pauseDetailDevice">暂停监控</button>
             <button v-if="deviceDetail.device.monitoring_state!=='ACTIVE'" class="btn primary" @click="enableDetailDevice">启用监控</button>
             <button v-if="deviceDetail.device.monitoring_state!=='STOPPED'" class="btn" @click="stopDetailDevice">停止监控</button>
@@ -1088,16 +1110,22 @@
           </div>
           <div class="trend-panel">
             <div class="group-top">
-              <h3 class="panel-title">最近探测趋势</h3>
-              <span class="panel-note">{{ deviceDetail.probe_metrics.length }} SAMPLES</span>
+              <h3 class="panel-title">延迟与成功率趋势</h3>
+              <div class="actions"><button class="mini-btn" :class="{primary:trendWindow==='24h'}" @click="trendWindow='24h'">24 小时</button><button class="mini-btn" :class="{primary:trendWindow==='7d'}" @click="trendWindow='7d'">7 天</button></div>
             </div>
-            <div class="trend-bars">
-              <div v-for="metric in trendMetrics(deviceDetail.probe_metrics)" :key="metric.id" class="trend-bar" :class="trendClass(metric)" :style="{height: trendHeight(metric)}" :title="metricTitle(metric)"></div>
+            <div class="trend-bars" style="grid-template-columns:repeat(auto-fit,minmax(8px,1fr))">
+              <div v-for="bucket in selectedTrend" :key="bucket.bucket" class="trend-bar" :class="{fail:bucket.success_percent<50,warn:bucket.success_percent>=50&&bucket.success_percent<100}" :style="{height: `${Math.max(8,Math.min(92,(bucket.latency_avg_ms||0)/5+8))}px`}" :title="`${bucket.bucket} · 成功 ${bucket.success_percent}% · 平均延迟 ${bucket.latency_avg_ms??'-'}ms · ${bucket.total} 次`"></div>
             </div>
-            <div class="trend-axis"><span>较早</span><span>延迟越高柱越高，红色为失败</span><span>最新</span></div>
+            <div class="trend-axis"><span>较早</span><span>柱高代表平均延迟，红/黄代表成功率下降；悬停看明细</span><span>最新</span></div>
+            <div v-if="!selectedTrend.length" class="empty">当前时间窗口暂无探测数据</div>
           </div>
           <div v-if="adminToken && authRole === 'admin'" class="form-grid">
             <h3 class="panel-title">维护模式</h3>
+            <div class="actions" style="justify-content:flex-start;">
+              <button class="btn" @click="setMaintenancePreset(30)">30 分钟</button>
+              <button class="btn" @click="setMaintenancePreset(120)">2 小时</button>
+              <button class="btn" @click="setMaintenancePreset('tonight')">今晚结束</button>
+            </div>
             <div class="toolbar" style="padding:0;border:0;background:transparent;">
               <input v-model="maintenanceUntilLocal" type="datetime-local" class="input" />
               <input v-model="maintenanceNote" class="input" placeholder="维护原因，例如链路割接" />
@@ -1123,20 +1151,26 @@
   </div>
 
 <script>
-const { createApp, ref, computed, watch, onMounted, onBeforeUnmount } = Vue;
+const { createApp, ref, computed, watch, nextTick, onMounted, onBeforeUnmount } = Vue;
 createApp({
 setup() {
 const savedView=(()=>{try{return JSON.parse(localStorage.getItem('netsentinel_view')||'{}')}catch{return {}}})();
 const hashView=new URLSearchParams(location.hash.slice(1));
+const pendingDeviceId=ref(Number(hashView.get('device'))||null);
 const devices = ref([]);
 const summary = ref({ alerts_24h:0, offline_alerts_24h:0, uptime_percent_7d:100, paused_devices:0, generated_at:null });
 const riskDevices = ref([]);
 const error = ref('');
+const loadingDevices = ref(true);
+const networkConnected = ref(navigator.onLine);
+const theme = ref(localStorage.getItem('netsentinel_theme')==='light'?'light':'dark');
+const wallMode = ref(false);
 const engineReady = ref(false);
 const adminToken = ref(sessionStorage.getItem('admin_token') || '');
 const authRole = ref(sessionStorage.getItem('auth_role') || 'admin');
 const weakAdminPassword = ref(false);
 const showAuthModal = ref(!adminToken.value);
+const loginInput = ref(null);
 const showSettingsModal = ref(false);
 const settingsTab = ref('monitor');
 const settings = ref({ ping_interval: 30, offline_threshold: 3, online_threshold: 2, feishu_webhook: '', silence_enabled: false, silence_start: '', silence_end: '', weekly_report_enabled: true, weekly_report_day_of_week: 'fri', weekly_report_time: '17:00', weekly_report_timezone: 'Asia/Shanghai' });
@@ -1157,12 +1191,16 @@ const restoreFile = ref(null);
 	const showAssetModal = ref(false);
 const showDeviceDetailModal = ref(false);
 const deviceDetail = ref(null);
+const trendWindow = ref('24h');
+const selectedTrend = computed(()=>trendWindow.value==='7d'?(deviceDetail.value?.trend_7d||[]):(deviceDetail.value?.trend_24h||[]));
 const maintenanceUntilLocal = ref('');
 const maintenanceNote = ref('');
 const assetTab = ref('single');
 const bulkText = ref('');
 const bulkPreview = ref(null);
 	const assetForm = ref({ id:null, name:'', ip_address:'', group_name:'default', is_monitoring:true, monitoring_state:'ACTIVE', probe_type:'ICMP', probe_port:null, probe_path:'', expected_status:null, probe_interval_seconds:null });
+const assetShowValidation = ref(false);
+const assetFormErrors = computed(()=>{const form=assetForm.value;const errors={};if(!form.name.trim()||form.name.trim().length>100)errors.name='设备名称必须填写，最长 100 字';if(!form.ip_address.trim()||/[\s/\\]/.test(form.ip_address))errors.ip_address='请填写有效 IP 地址或主机名，不能包含空格、斜杠';if(form.probe_type==='TCP'&&(!Number.isInteger(Number(form.probe_port))||Number(form.probe_port)<1||Number(form.probe_port)>65535))errors.probe_port='TCP 端口必须为 1 至 65535 的整数';if(form.probe_interval_seconds!==null&&form.probe_interval_seconds!==''&&(!Number.isInteger(Number(form.probe_interval_seconds))||Number(form.probe_interval_seconds)<5||Number(form.probe_interval_seconds)>86400))errors.probe_interval_seconds='探测周期必须为 5 至 86400 秒';return errors;});
 const toast = ref({ show:false, type:'success', message:'', undoId:0 });
 const selectedGroup = ref(hashView.get('group')||savedView.group||'__ALL__');
 const statusFilter = ref(hashView.get('status')||savedView.status||'');
@@ -1173,6 +1211,8 @@ const viewMode = ref(hashView.get('view')||savedView.view||'cards');
 const currentPage = ref(1);
 const pageSize = 60;
 const searchInput = ref(null);
+watch(showAuthModal,async visible=>{if(visible){await nextTick();loginInput.value?.focus();}});
+watch(showAssetModal,async visible=>{if(visible){await nextTick();document.querySelector('.dialog input[aria-label="设备名称"]')?.focus();}});
 const logs = ref([]);
 const logLevel = ref('');
 const logCategory = ref('');
@@ -1197,10 +1237,12 @@ const alertType = ref('');
 const alertDeviceId = ref(null);
 const groupPolicies = ref([]);
 const policyForm = ref({ group_name:'', offline_threshold:3, online_threshold:2, feishu_webhook:'', silence_enabled:false, silence_start:'', silence_end:'' });
+const selectedPolicy = computed(()=>groupPolicies.value.find(policy=>policy.group_name===policyForm.value.group_name)||null);
 const notificationChannels = ref([]);
 const groupRoutes = ref([]);
 const notificationDeliveries = ref([]);
 const channelForm = ref({ id:null, name:'', channel_type:'FEISHU', endpoint:'', enabled:true, extra_config:'' });
+const channelTestResult = ref(null);
 	const routeGroupName = ref('');
 	const routeChannelIds = ref([]);
 	const deliveryStatus = ref('');
@@ -1212,10 +1254,14 @@ const channelForm = ref({ id:null, name:'', channel_type:'FEISHU', endpoint:'', 
 let toastTimer=null;
 const showToast=(message,type='success',undoId=0)=>{clearTimeout(toastTimer);toast.value={show:true,type,message,undoId};toastTimer=setTimeout(()=>toast.value.show=false,undoId?10000:3000);};
 const authHeaders=()=>({Authorization:`Bearer ${adminToken.value}`});
-const apiJson=async(url,options={})=>{const r=await fetch(url,options);const b=await r.json().catch(()=>({}));if(!r.ok){if(r.status===401 && url!=='/api/auth/login'){adminToken.value='';sessionStorage.removeItem('admin_token');sessionStorage.removeItem('auth_role');showAuthModal.value=true;}const err=new Error(b.detail||`请求失败: ${r.status}`);err.status=r.status;throw err;}return b;};
-const refreshDashboard=async()=>{if(!adminToken.value)return;await Promise.all([fetchDevices(), fetchSummary(), fetchRiskDevices(), fetchReadiness()]); await fetchAlerts(true);};
+const apiJson=async(url,options={})=>{let r;try{r=await fetch(url,options);networkConnected.value=true;}catch(error){networkConnected.value=false;throw new Error('网络连接中断，请稍后重试');}const b=await r.json().catch(()=>({}));if(!r.ok){if(r.status===401 && url!=='/api/auth/login'){adminToken.value='';sessionStorage.removeItem('admin_token');sessionStorage.removeItem('auth_role');showAuthModal.value=true;}const err=new Error(b.detail||`请求失败: ${r.status}`);err.status=r.status;throw err;}return b;};
+const refreshDashboard=async()=>{if(!adminToken.value)return;await Promise.all([fetchDevices(), fetchSummary(), fetchRiskDevices(), fetchReadiness()]); await fetchAlerts(true);if(pendingDeviceId.value&&devices.value.some(device=>device.id===pendingDeviceId.value)){const id=pendingDeviceId.value;pendingDeviceId.value=null;await openDeviceDetail(id);}};
 const fetchReadiness=async()=>{try{const response=await fetch('/health/ready',{cache:'no-store'});engineReady.value=response.ok;}catch{engineReady.value=false;}};
-const fetchDevices=async()=>{try{devices.value=await apiJson('/api/devices',{headers:authHeaders(),cache:'no-store'});error.value='';}catch(e){error.value=`加载设备失败: ${e.message}`;}};
+const fetchDevices=async()=>{try{devices.value=await apiJson('/api/devices',{headers:authHeaders(),cache:'no-store'});error.value='';}catch(e){error.value=`加载设备失败: ${e.message}`;}finally{loadingDevices.value=false;}};
+const toggleTheme=()=>{theme.value=theme.value==='dark'?'light':'dark';localStorage.setItem('netsentinel_theme',theme.value);document.body.classList.toggle('light',theme.value==='light');};
+const toggleWallMode=async()=>{if(!wallMode.value){try{await document.documentElement.requestFullscreen();}catch(e){showToast('浏览器未允许全屏','error');return;}}else if(document.fullscreenElement){await document.exitFullscreen();}wallMode.value=!!document.fullscreenElement;document.body.classList.toggle('wall-mode',wallMode.value);};
+const onConnectionChange=()=>{networkConnected.value=navigator.onLine;if(networkConnected.value&&adminToken.value)refreshDashboard();};
+const onFullscreenChange=()=>{wallMode.value=!!document.fullscreenElement;document.body.classList.toggle('wall-mode',wallMode.value);};
 const fetchSummary=async()=>{try{summary.value=await apiJson('/api/summary',{headers:authHeaders()});}catch(e){}};
 const fetchRiskDevices=async()=>{try{riskDevices.value=await apiJson('/api/risk-devices',{headers:authHeaders()});}catch(e){riskDevices.value=[];}};
 const fetchSettings=async()=>{settingsErr.value='';settingsMsg.value='';settings.value=await apiJson('/api/settings',{headers:authHeaders()});};
@@ -1242,10 +1288,10 @@ const openSettings=async()=>{if(!adminToken.value){showAuthModal.value=true;retu
 	const closeBulkDeleteConfirm=()=>{showBulkDeleteModal.value=false;bulkDeleteConfirmation.value='';};
 	const bulkDeleteDevices=async()=>{if(!adminToken.value||isBulkUpdating.value)return;const expected=String(selectedDeviceIds.value.length);if(bulkDeleteConfirmation.value.trim()!==expected){showToast(`请输入 ${expected} 后再删除`,'error');return;}isBulkUpdating.value=true;try{const result=await apiJson('/api/devices/bulk-delete',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({device_ids:selectedDeviceIds.value,confirmation:bulkDeleteConfirmation.value.trim()})});await refreshDashboard();clearBulkSelection();closeBulkDeleteConfirm();showToast(`已移入回收站: ${result.deleted} 台`, 'success', result.recycle_id||0);}catch(e){if(e.status===401){adminToken.value='';sessionStorage.removeItem('admin_token');showAuthModal.value=true;}showToast(e.message,'error');}finally{isBulkUpdating.value=false;}};
 		const emptyAssetForm=()=>({id:null,name:'',ip_address:'',group_name:'default',is_monitoring:true,monitoring_state:'ACTIVE',probe_type:'ICMP',probe_port:null,probe_path:'',expected_status:null,probe_interval_seconds:null});
-	const openAssetModalForCreate=()=>{assetTab.value='single';assetForm.value=emptyAssetForm();showAssetModal.value=true;};
-	const openAssetModalForEdit=(d)=>{assetTab.value='single';assetForm.value={id:d.id,name:d.name,ip_address:d.ip_address,group_name:d.group_name||'default',is_monitoring:!!d.is_monitoring,monitoring_state:d.monitoring_state|| (d.is_monitoring?'ACTIVE':'PAUSED'),probe_type:d.probe_type||'ICMP',probe_port:d.probe_port||null,probe_path:d.probe_path||'',expected_status:d.expected_status||null,probe_interval_seconds:d.probe_interval_seconds||null};showAssetModal.value=true;};
+	const openAssetModalForCreate=()=>{assetTab.value='single';assetShowValidation.value=false;assetForm.value=emptyAssetForm();showAssetModal.value=true;};
+	const openAssetModalForEdit=(d)=>{assetTab.value='single';assetShowValidation.value=false;assetForm.value={id:d.id,name:d.name,ip_address:d.ip_address,group_name:d.group_name||'default',is_monitoring:!!d.is_monitoring,monitoring_state:d.monitoring_state|| (d.is_monitoring?'ACTIVE':'PAUSED'),probe_type:d.probe_type||'ICMP',probe_port:d.probe_port||null,probe_path:d.probe_path||'',expected_status:d.expected_status||null,probe_interval_seconds:d.probe_interval_seconds||null};showAssetModal.value=true;};
 	const normalizedAssetPayload=()=>{const monitoringState=assetForm.value.monitoring_state || (assetForm.value.is_monitoring?'ACTIVE':'PAUSED');const p={name:assetForm.value.name.trim(),ip_address:assetForm.value.ip_address.trim(),group_name:(assetForm.value.group_name||'default').trim()||'default',is_monitoring:monitoringState==='ACTIVE',monitoring_state:monitoringState,probe_type:assetForm.value.probe_type||'ICMP',probe_port:null,probe_path:'',expected_status:null,probe_interval_seconds:assetForm.value.probe_interval_seconds?Number(assetForm.value.probe_interval_seconds):null};if(p.probe_type==='TCP')p.probe_port=assetForm.value.probe_port?Number(assetForm.value.probe_port):null;if(p.probe_type==='HTTP'){p.probe_path=(assetForm.value.probe_path||'').trim();p.expected_status=assetForm.value.expected_status?Number(assetForm.value.expected_status):null;}return p;};
-const saveSingleAsset=async()=>{if(!adminToken.value)return;const p=normalizedAssetPayload();if(!p.name||!p.ip_address){showToast('设备名称和IP地址不能为空','error');return;}if(p.probe_type==='TCP'&&!p.probe_port){showToast('TCP 探测需要填写端口','error');return;}try{if(assetForm.value.id){await apiJson(`/api/devices/${assetForm.value.id}`,{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(p)});}else{await apiJson('/api/devices',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(p)});}await refreshDashboard();if(deviceDetail.value&&assetForm.value.id===deviceDetail.value.device.id)await refreshOpenDeviceDetail();showAssetModal.value=false;showToast(assetForm.value.id?'设备修改成功':'设备新增成功');}catch(e){showToast(e.message,'error');}};
+const saveSingleAsset=async()=>{if(!adminToken.value)return;assetShowValidation.value=true;const firstError=Object.values(assetFormErrors.value)[0];if(firstError){showToast(firstError,'error');return;}const p=normalizedAssetPayload();try{if(assetForm.value.id){await apiJson(`/api/devices/${assetForm.value.id}`,{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(p)});}else{await apiJson('/api/devices',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(p)});}await refreshDashboard();if(deviceDetail.value&&assetForm.value.id===deviceDetail.value.device.id)await refreshOpenDeviceDetail();showAssetModal.value=false;showToast(assetForm.value.id?'设备修改成功':'设备新增成功');}catch(e){showToast(e.message,'error');}};
 const downloadText=(filename,text)=>{const url=URL.createObjectURL(new Blob(['\ufeff',text],{type:'text/csv;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download=filename;link.click();URL.revokeObjectURL(url);};
 const csvCell=(value)=>{let cell=String(value??'');if(/^[\s]*[=+\-@]/.test(cell))cell="'"+cell;return `"${cell.replaceAll('"','""')}"`;};
 const downloadBulkTemplate=()=>downloadText('netsentinel-import-template.csv','name,ip_address,group_name,probe_type,probe_port,probe_path\n核心交换机,10.0.0.1,网络设备,ICMP,,\nSSH服务,10.0.0.2,服务器,TCP,22,\n');
@@ -1267,6 +1313,8 @@ const submitBulkImport=async()=>{if(!adminToken.value||!bulkPreview.value)return
 const toDatetimeLocal=(value)=>{if(!value)return '';const normalized=/([zZ]|[+-]\d{2}:\d{2})$/.test(value)?value:(value+'Z');const date=new Date(normalized);if(Number.isNaN(date.getTime()))return '';const pad=n=>String(n).padStart(2,'0');return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;};
 const openDeviceDetail=async(id)=>{if(!adminToken.value){showAuthModal.value=true;return;}try{deviceDetail.value=await apiJson(`/api/devices/${id}/detail`,{headers:authHeaders()});maintenanceUntilLocal.value=toDatetimeLocal(deviceDetail.value.device.maintenance_until);maintenanceNote.value=deviceDetail.value.device.maintenance_note||'';showDeviceDetailModal.value=true;}catch(e){if(e.status===401){adminToken.value='';sessionStorage.removeItem('admin_token');showAuthModal.value=true;}showToast(e.message,'error');}};
 const refreshOpenDeviceDetail=async()=>{if(!deviceDetail.value)return;deviceDetail.value=await apiJson(`/api/devices/${deviceDetail.value.device.id}/detail`,{headers:authHeaders()});maintenanceUntilLocal.value=toDatetimeLocal(deviceDetail.value.device.maintenance_until);maintenanceNote.value=deviceDetail.value.device.maintenance_note||'';};
+const probeDetailDevice=async()=>{if(!deviceDetail.value||isTriggering.value)return;isTriggering.value=true;try{await apiJson(`/api/devices/${deviceDetail.value.device.id}/probe`,{method:'POST',headers:authHeaders()});showToast('已安排此设备立即探测');await new Promise(resolve=>setTimeout(resolve,1200));await refreshDashboard();await refreshOpenDeviceDetail();}catch(e){showToast(e.message,'error');}finally{isTriggering.value=false;}};
+const setMaintenancePreset=(duration)=>{const until=new Date();if(duration==='tonight'){until.setHours(23,59,0,0);if(until.getTime()<=Date.now())until.setDate(until.getDate()+1);}else{until.setMinutes(until.getMinutes()+duration);}const pad=value=>String(value).padStart(2,'0');maintenanceUntilLocal.value=`${until.getFullYear()}-${pad(until.getMonth()+1)}-${pad(until.getDate())}T${pad(until.getHours())}:${pad(until.getMinutes())}`;};
 const saveMaintenance=async()=>{if(!deviceDetail.value||!maintenanceUntilLocal.value){showToast('请选择维护截止时间','error');return;}try{await apiJson(`/api/devices/${deviceDetail.value.device.id}/maintenance`,{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({maintenance_until:new Date(maintenanceUntilLocal.value).toISOString(),maintenance_note:maintenanceNote.value})});await refreshDashboard();await refreshOpenDeviceDetail();showToast('维护模式已保存');}catch(e){showToast(e.message,'error');}};
 const clearMaintenance=async()=>{if(!deviceDetail.value)return;try{await apiJson(`/api/devices/${deviceDetail.value.device.id}/maintenance`,{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({maintenance_until:null,maintenance_note:''})});await refreshDashboard();await refreshOpenDeviceDetail();showToast('维护模式已取消');}catch(e){showToast(e.message,'error');}};
 const saveSettings=async()=>{settingsErr.value='';settingsMsg.value='';try{settings.value=await apiJson('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(settings.value)});settingsMsg.value='设置保存成功';showToast('系统设置已保存');}catch(e){settingsErr.value=e.message;showToast(e.message,'error');}};
@@ -1279,7 +1327,7 @@ const resetChannelForm=()=>{channelForm.value={id:null,name:'',channel_type:'FEI
 const loadChannelForm=(channel)=>{channelForm.value={...channel,endpoint:'',extra_config:''};};
 const openChannelsTab=async()=>{settingsTab.value='channels';try{await fetchNotificationChannels();await fetchGroupRoutes();await fetchNotificationDeliveries();if(!routeGroupName.value)loadRouteForm(groups.value[0]||'');}catch(e){showToast(e.message,'error');}};
 const saveNotificationChannel=async()=>{if(!channelForm.value.name){showToast('请填写渠道名称','error');return;}try{const body={...channelForm.value};if(body.id){await apiJson(`/api/notification-channels/${body.id}`,{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});}else{await apiJson('/api/notification-channels',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});}await fetchNotificationChannels();resetChannelForm();showToast('通知渠道已保存');}catch(e){showToast(e.message,'error');}};
-const testNotificationChannel=async()=>{if(!channelForm.value.id)return;try{const b=await apiJson(`/api/notification-channels/${channelForm.value.id}/test`,{method:'POST',headers:authHeaders()});await fetchNotificationDeliveries();showToast(b.status==='success'?'测试通知发送成功':'测试通知发送失败，请查看投递记录',b.status==='success'?'success':'error');}catch(e){showToast(e.message,'error');}};
+const testNotificationChannel=async()=>{if(!channelForm.value.id)return;channelTestResult.value=null;try{const b=await apiJson(`/api/notification-channels/${channelForm.value.id}/test`,{method:'POST',headers:authHeaders()});await fetchNotificationDeliveries();const delivery=notificationDeliveries.value.find(item=>item.channel_id===channelForm.value.id);channelTestResult.value={success:b.status==='success',message:`${b.status==='success'?'送达成功':'送达失败'}：${delivery ? deliverySummary(delivery) : '查看下方投递记录'}`};showToast(channelTestResult.value.message,b.status==='success'?'success':'error');}catch(e){channelTestResult.value={success:false,message:e.message};showToast(e.message,'error');}};
 const deleteNotificationChannel=async()=>{if(!channelForm.value.id)return;if(!confirm(`删除通知渠道 ${channelForm.value.name} 吗？`))return;try{await apiJson(`/api/notification-channels/${channelForm.value.id}`,{method:'DELETE',headers:authHeaders()});await fetchNotificationChannels();await fetchGroupRoutes();resetChannelForm();loadRouteForm(routeGroupName.value);showToast('通知渠道已删除');}catch(e){showToast(e.message,'error');}};
 const loadRouteForm=(groupName)=>{routeGroupName.value=groupName||'';const route=groupRoutes.value.find(r=>r.group_name===routeGroupName.value);routeChannelIds.value=route?[...route.channel_ids]:[];};
 const saveGroupRoute=async()=>{if(!routeGroupName.value){showToast('请先选择分组','error');return;}try{const encoded=encodeURIComponent(routeGroupName.value);const body={channel_ids:routeChannelIds.value.map(Number)};await apiJson(`/api/group-notification-routes/${encoded}`,{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});await fetchGroupRoutes();loadRouteForm(routeGroupName.value);showToast('分组通知路由已保存');}catch(e){showToast(e.message,'error');}};
@@ -1287,7 +1335,7 @@ const downloadFile=async(url,filename)=>{const r=await fetch(url,{headers:authHe
 const downloadBackup=async()=>{try{await downloadFile('/api/backup','monitor.db');showToast('数据库备份下载成功');}catch(e){showToast(e.message,'error');}};
 const downloadDevicesCsv=async()=>{try{await downloadFile('/api/devices/export.csv','netsentinel-devices.csv');showToast('设备清单导出成功');}catch(e){showToast(e.message,'error');}};
 const onRestoreFileChange=(e)=>{restoreFile.value=e.target.files[0]||null;};
-const restoreBackup=async()=>{if(!restoreFile.value){settingsErr.value='请先选择 .db 文件';return;}const fd=new FormData();fd.append('file',restoreFile.value);try{const b=await apiJson('/api/restore',{method:'POST',headers:authHeaders(),body:fd});settingsMsg.value=b.message||'恢复成功';showToast(b.message||'恢复成功');}catch(e){settingsErr.value=e.message;showToast(e.message,'error');}};
+const restoreBackup=async()=>{if(!restoreFile.value){settingsErr.value='请先选择 .db 文件';return;}if(!confirm(`确认用 ${restoreFile.value.name} 覆盖当前数据库吗？当前设备、告警、设置将整体替换，系统会先自动备份。`))return;const fd=new FormData();fd.append('file',restoreFile.value);try{const b=await apiJson('/api/restore',{method:'POST',headers:authHeaders(),body:fd});settingsMsg.value=b.message||'恢复成功';showToast(b.message||'恢复成功');}catch(e){settingsErr.value=e.message;showToast(e.message,'error');}};
 const fetchLogs=async()=>{const params=new URLSearchParams();if(logLevel.value)params.set('level',logLevel.value);if(logCategory.value.trim())params.set('category',logCategory.value.trim());if(logKeyword.value.trim())params.set('q',logKeyword.value.trim());logs.value=await apiJson(`/api/logs?${params.toString()}`,{headers:authHeaders()});};
 const openLogsTab=async()=>{settingsTab.value='logs';try{await fetchLogs();}catch(e){showToast(e.message,'error');}};
 const fetchAuditTimeline=async()=>{const params=new URLSearchParams();if(auditKeyword.value.trim())params.set('q',auditKeyword.value.trim());if(auditDeviceId.value)params.set('device_id',auditDeviceId.value);if(auditAction.value)params.set('action',auditAction.value);auditTimeline.value=await apiJson(`/api/audit-timeline?${params.toString()}`,{headers:authHeaders()});};
@@ -1354,9 +1402,9 @@ const deviceClass=(d)=>({online:statusKind(d)==='ONLINE',offline:statusKind(d)==
 const formatAge=(value)=>{const ms=normalizeDateMs(value);if(ms===null)return '暂无';const seconds=Math.max(0,Math.floor((nowTick.value-ms)/1000));if(seconds<60)return `${seconds} 秒`;if(seconds<3600)return `${Math.floor(seconds/60)} 分`;if(seconds<86400)return `${Math.floor(seconds/3600)} 小时`;return `${Math.floor(seconds/86400)} 天`;};
 const formatDuration=(seconds)=>{if(!seconds)return '-';const h=Math.floor(seconds/3600);const m=Math.floor((seconds%3600)/60);const s=seconds%60;if(h)return `${h}小时${m}分`;if(m)return `${m}分${s}秒`;return `${s}秒`;};
 	const onGlobalKeydown=(event)=>{if(event.key==='Escape'){showDeviceDetailModal.value=false;showAssetModal.value=false;showSettingsModal.value=false;closeBulkDeleteConfirm();closeSnapshotRestore();return;}if(event.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)){event.preventDefault();searchInput.value?.focus();}};
-	onMounted(async()=>{document.addEventListener('keydown',onGlobalKeydown);if(adminToken.value){await refreshDashboard();try{weakAdminPassword.value=(await apiJson('/api/security-status',{headers:authHeaders()})).weak_admin_password;}catch(e){}}timer=setInterval(refreshDashboard,10000);clockTimer=setInterval(()=>nowTick.value=Date.now(),1000);});
-	onBeforeUnmount(()=>{document.removeEventListener('keydown',onGlobalKeydown);clearTimeout(searchDebounceTimer);clearTimeout(toastTimer);if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);});
-		return {recycleBin,openRecycleTab,restoreRecycleEntry,devices,summary,riskDevices,error,engineReady,stateCounts,offlineTop,adminToken,authRole,weakAdminPassword,showAuthModal,showSettingsModal,settingsTab,settings,settingsMsg,settingsErr,authError,adminUser,adminPass,restoreFile,isTriggering,isBulkUpdating,bulkMode,selectedDeviceIds,bulkGroupName,bulkProbeInterval,showBulkDeleteModal,bulkDeleteConfirmation,showSnapshotRestoreModal,snapshotRestoreRows,selectedSnapshotRows,isRestoringSnapshot,showAssetModal,showDeviceDetailModal,deviceDetail,maintenanceUntilLocal,maintenanceNote,assetTab,bulkText,bulkPreview,previewBulkImport,downloadBulkTemplate,downloadBulkErrors,assetForm,toast,selectedGroup,statusFilter,keyword,sortMode,viewMode,currentPage,pageSize,pageCount,visibleDevices,searchInput,logs,logLevel,logCategory,logKeyword,auditTimeline,auditKeyword,auditDeviceId,auditAction,deleteSnapshots,snapshotKeyword,snapshotOperator,snapshotStart,snapshotEnd,alerts,alertType,alertDeviceId,groupPolicies,policyForm,notificationChannels,groupRoutes,notificationDeliveries,channelForm,routeGroupName,routeChannelIds,deliveryStatus,deliveryChannelId,channelEndpointPlaceholder,groups,groupStats,filteredDevices,totalCount,onlineCount,offlineCount,unknownCount,pausedCount,statusText,auditActionText,probeTypeText,channelTypeText,deliveryKindText,deliverySummary,endpointPreview,trendMetrics,trendHeight,trendClass,metricTitle,displayStatus,statusBadgeName,deviceClass,isStale,showProbeCountdown,probeCountdownPercent,probeCountdownText,probeStripClass,formatTime,formatAge,formatDuration,loginAdmin,logoutAdmin,openSettings,triggerMonitorNow,toggleBulkMode,isDeviceSelected,toggleDeviceSelection,selectVisibleDevices,clearBulkSelection,handleDeviceCardClick,bulkPause,bulkStop,bulkUpdateGroup,bulkUpdateProbeInterval,openBulkDeleteConfirm,closeBulkDeleteConfirm,bulkDeleteDevices,openAssetModalForCreate,openAssetModalForEdit,saveSingleAsset,submitBulkImport,deleteDevice,toggleMonitoring,pauseMonitoring,enableMonitoring,stopMonitoring,pauseDetailDevice,enableDetailDevice,stopDetailDevice,editDetailDevice,deleteDetailDevice,openDeviceDetail,saveMaintenance,clearMaintenance,saveSettings,openPoliciesTab,loadPolicyForm,saveGroupPolicy,deleteGroupPolicy,openChannelsTab,resetChannelForm,loadChannelForm,saveNotificationChannel,testNotificationChannel,deleteNotificationChannel,loadRouteForm,saveGroupRoute,downloadBackup,downloadDevicesCsv,onRestoreFileChange,restoreBackup,fetchLogs,openLogsTab,fetchAuditTimeline,openAuditTab,fetchDeleteSnapshots,openSnapshotsTab,isDeletionSnapshot,downloadLogCsvSnapshot,openSnapshotRestore,closeSnapshotRestore,selectRestorableSnapshotRows,isSnapshotRowSelected,toggleSnapshotRow,restoreSelectedSnapshotRows,fetchAlerts,openAlertsTab,fetchNotificationDeliveries};
+	onMounted(async()=>{document.body.classList.toggle('light',theme.value==='light');document.addEventListener('keydown',onGlobalKeydown);document.addEventListener('fullscreenchange',onFullscreenChange);window.addEventListener('online',onConnectionChange);window.addEventListener('offline',onConnectionChange);if(adminToken.value){await refreshDashboard();try{weakAdminPassword.value=(await apiJson('/api/security-status',{headers:authHeaders()})).weak_admin_password;}catch(e){}}else loadingDevices.value=false;timer=setInterval(refreshDashboard,10000);clockTimer=setInterval(()=>nowTick.value=Date.now(),1000);});
+	onBeforeUnmount(()=>{document.removeEventListener('keydown',onGlobalKeydown);document.removeEventListener('fullscreenchange',onFullscreenChange);window.removeEventListener('online',onConnectionChange);window.removeEventListener('offline',onConnectionChange);clearTimeout(searchDebounceTimer);clearTimeout(toastTimer);if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);});
+		return {recycleBin,openRecycleTab,restoreRecycleEntry,devices,summary,riskDevices,error,loadingDevices,networkConnected,theme,wallMode,toggleTheme,toggleWallMode,engineReady,stateCounts,offlineTop,adminToken,authRole,weakAdminPassword,showAuthModal,loginInput,showSettingsModal,settingsTab,settings,settingsMsg,settingsErr,authError,adminUser,adminPass,restoreFile,isTriggering,isBulkUpdating,bulkMode,selectedDeviceIds,bulkGroupName,bulkProbeInterval,showBulkDeleteModal,bulkDeleteConfirmation,showSnapshotRestoreModal,snapshotRestoreRows,selectedSnapshotRows,isRestoringSnapshot,showAssetModal,showDeviceDetailModal,deviceDetail,trendWindow,selectedTrend,maintenanceUntilLocal,maintenanceNote,assetTab,assetShowValidation,assetFormErrors,bulkText,bulkPreview,previewBulkImport,downloadBulkTemplate,downloadBulkErrors,assetForm,toast,selectedGroup,statusFilter,keyword,sortMode,viewMode,currentPage,pageSize,pageCount,visibleDevices,searchInput,logs,logLevel,logCategory,logKeyword,auditTimeline,auditKeyword,auditDeviceId,auditAction,deleteSnapshots,snapshotKeyword,snapshotOperator,snapshotStart,snapshotEnd,alerts,alertType,alertDeviceId,groupPolicies,policyForm,selectedPolicy,notificationChannels,groupRoutes,notificationDeliveries,channelForm,channelTestResult,routeGroupName,routeChannelIds,deliveryStatus,deliveryChannelId,channelEndpointPlaceholder,groups,groupStats,filteredDevices,totalCount,onlineCount,offlineCount,unknownCount,pausedCount,statusText,auditActionText,probeTypeText,channelTypeText,deliveryKindText,deliverySummary,endpointPreview,trendMetrics,trendHeight,trendClass,metricTitle,displayStatus,statusBadgeName,deviceClass,isStale,showProbeCountdown,probeCountdownPercent,probeCountdownText,probeStripClass,formatTime,formatAge,formatDuration,loginAdmin,logoutAdmin,openSettings,triggerMonitorNow,toggleBulkMode,isDeviceSelected,toggleDeviceSelection,selectVisibleDevices,clearBulkSelection,handleDeviceCardClick,bulkPause,bulkStop,bulkUpdateGroup,bulkUpdateProbeInterval,openBulkDeleteConfirm,closeBulkDeleteConfirm,bulkDeleteDevices,openAssetModalForCreate,openAssetModalForEdit,saveSingleAsset,submitBulkImport,deleteDevice,toggleMonitoring,pauseMonitoring,enableMonitoring,stopMonitoring,pauseDetailDevice,enableDetailDevice,stopDetailDevice,editDetailDevice,deleteDetailDevice,openDeviceDetail,probeDetailDevice,setMaintenancePreset,saveMaintenance,clearMaintenance,saveSettings,openPoliciesTab,loadPolicyForm,saveGroupPolicy,deleteGroupPolicy,openChannelsTab,resetChannelForm,loadChannelForm,saveNotificationChannel,testNotificationChannel,deleteNotificationChannel,loadRouteForm,saveGroupRoute,downloadBackup,downloadDevicesCsv,onRestoreFileChange,restoreBackup,fetchLogs,openLogsTab,fetchAuditTimeline,openAuditTab,fetchDeleteSnapshots,openSnapshotsTab,isDeletionSnapshot,downloadLogCsvSnapshot,openSnapshotRestore,closeSnapshotRestore,selectRestorableSnapshotRows,isSnapshotRowSelected,toggleSnapshotRow,restoreSelectedSnapshotRows,fetchAlerts,openAlertsTab,fetchNotificationDeliveries};
 }
 }).mount('#app');
 </script>

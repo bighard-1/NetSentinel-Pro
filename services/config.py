@@ -1,6 +1,7 @@
 """Validated process configuration with explicit secret handling."""
 
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -45,11 +46,16 @@ class AppSettings(BaseSettings):
     smtp_from: str = ""
     smtp_tls: bool = True
     feishu_webhook: SecretStr = SecretStr("")
+    public_base_url: str = ""
 
     @model_validator(mode="after")
     def check_production_secret(self):
         if self.app_env.lower() == "production" and not self.app_secret.get_secret_value().strip():
             raise ValueError("APP_SECRET must be set in production")
+        if self.public_base_url:
+            parsed = urlsplit(self.public_base_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError("PUBLIC_BASE_URL must be an HTTP(S) URL without embedded credentials")
         return self
 
     def safe_summary(self) -> dict[str, str | int | bool]:
