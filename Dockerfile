@@ -20,7 +20,7 @@ RUN apt-get update \
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY --chown=10001:10001 . /app
-RUN mkdir -p /app/data && chown 10001:10001 /app/data
+RUN mkdir -p /app/data && chown 10001:10001 /app /app/data
 
 USER 10001:10001
 EXPOSE 8000

@@ -293,7 +293,16 @@ P3 迁移将设备唯一标识改为 IP、探测类型、端口、路径的组�
 1000 台模拟设备的 P1 压测结果见 [压测报告](docs/benchmarks/p1-1000-devices.md)。
 P3 数据模型升级后的复测结果见 [P3 压测报告](docs/benchmarks/p3-1000-devices.md)。
 
-## 构建 x86 Docker 镜像
+## x86_64（amd64）Docker 镜像
+
+CI 在整改分支通过测试和双架构安全扫描后，会额外构建并运行 amd64 容器自检，再发布候选镜像到 GHCR：
+
+```text
+ghcr.io/bighard-1/netsentinel-pro:0.6.0-amd64-candidate
+ghcr.io/bighard-1/netsentinel-pro:0.6.0-amd64-<提交 SHA 前 12 位>
+```
+
+推荐部署时使用与验收提交对应的 SHA 标签，避免候选标签更新后意外更换镜像。本机手工构建命令：
 
 ```bash
 docker build --platform linux/amd64 -t netsentinel-pro:latest .
@@ -304,6 +313,25 @@ docker build --platform linux/amd64 -t netsentinel-pro:latest .
 ```bash
 docker tag netsentinel-pro:latest ghcr.io/bighard-1/netsentinel-pro:latest
 ```
+
+在 x86_64 服务器上使用预构建镜像时，先拉取本仓库及其 `docker-compose.yml`，按上文创建 `.env`，并添加：
+
+```dotenv
+NETSENTINEL_IMAGE=ghcr.io/bighard-1/netsentinel-pro:0.6.0-amd64-candidate
+```
+
+确认 GHCR 包可访问后，在服务器运行：
+
+```bash
+docker pull --platform linux/amd64 ghcr.io/bighard-1/netsentinel-pro:0.6.0-amd64-candidate
+docker image inspect ghcr.io/bighard-1/netsentinel-pro:0.6.0-amd64-candidate --format '{{.Architecture}}'
+mkdir -p data
+docker compose up -d --no-build --pull never
+docker compose ps
+curl -f http://127.0.0.1:8000/health/ready
+```
+
+`docker image inspect` 应输出 `amd64`。已有数据升级前请先按[运维手册](docs/operations.md#备份升级与回滚)备份 `data/` 和 `APP_SECRET`；挂载目录必须允许容器 UID 10001 写入。若 GHCR 包为私有，在服务器先用具有 `read:packages` 权限的凭据登录 `ghcr.io`，不要把凭据写入仓库或 `.env`。Compose 使用 `--no-build --pull never`，确保启动的是刚拉取的镜像。
 
 ## 本地开发
 

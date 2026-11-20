@@ -1,6 +1,7 @@
 services:
   netsentinel:
     build: .
+    image: ${NETSENTINEL_IMAGE:-netsentinel-pro:local}
     container_name: netsentinel
     ports:
       - "127.0.0.1:8000:8000"
