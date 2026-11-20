@@ -5,10 +5,11 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import desc, func, select
+from sqlalchemy import delete, desc, func, select
 
 from api.dependencies import current_admin_subject, verify_admin_token
 from database import DB_DIR, SessionLocal
+from engine import forget_device_state
 from logging_service import log_event
 from models import AlertLog, Device, EventType, MonitoringState, ProbeMetric, ProbeType, SystemLog
 from services.device_status import (
@@ -821,7 +822,12 @@ def delete_devices_bulk(
         snapshot_path = _save_deleted_devices_snapshot(csv_snapshot) if devices else ""
         for device in devices:
             session.delete(device)
+        if devices:
+            session.execute(delete(ProbeMetric).where(ProbeMetric.device_id.in_([device.id for device in devices])))
         session.commit()
+
+    for device in devices:
+        forget_device_state(device.id)
 
     deleted = len(devices)
     skipped = len(unique_ids) - deleted
@@ -934,7 +940,10 @@ def delete_device(device_id: int, operator: str = Depends(current_admin_subject)
         ip_address = device.ip_address
         group_name = device.group_name
         session.delete(device)
+        session.execute(delete(ProbeMetric).where(ProbeMetric.device_id == device_id))
         session.commit()
+
+    forget_device_state(device_id)
 
     log_event(
         category="asset",

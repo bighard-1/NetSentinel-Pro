@@ -34,14 +34,21 @@ class ProbeResult:
     error: str = ""
 
 
-_state_by_ip: dict[str, ProbeState] = {}
+_state_by_device: dict[tuple[int, str], ProbeState] = {}
+
+
+def forget_device_state(device_id: int) -> None:
+    for key in list(_state_by_device):
+        if key[0] == device_id:
+            _state_by_device.pop(key, None)
 
 
 async def ping(ip_address: str, timeout_seconds: int = 2) -> ProbeResult:
-    is_windows = platform.system().lower().startswith("win")
+    system = platform.system().lower()
+    is_windows = system.startswith("win")
     count_flag = "-n" if is_windows else "-c"
     timeout_flag = "-w" if is_windows else "-W"
-    timeout_value = str(int(timeout_seconds * 1000)) if is_windows else str(timeout_seconds)
+    timeout_value = str(int(timeout_seconds * 1000)) if is_windows or system == "darwin" else str(timeout_seconds)
 
     started_at = time.perf_counter()
     process = await asyncio.create_subprocess_exec(
@@ -81,7 +88,8 @@ def _http_url(device: Device) -> str:
         path = target if target.startswith("/") else f"/{target}"
     else:
         path = "/"
-    return f"http://{device.ip_address}{path}"
+    host = f"[{device.ip_address}]" if ":" in device.ip_address else device.ip_address
+    return f"http://{host}{path}"
 
 
 async def probe_http(device: Device, timeout_seconds: int = 5) -> ProbeResult:
@@ -302,6 +310,11 @@ async def monitor_loop(stop_event: asyncio.Event, trigger_event: asyncio.Event |
                 )
             ).scalars().all()
 
+        active_keys = {(device.id, device.ip_address) for device in devices}
+        for key in list(_state_by_device):
+            if key not in active_keys:
+                _state_by_device.pop(key, None)
+
         device_ids = [device.id for device in devices]
         latest_status_map = await asyncio.to_thread(_load_latest_status_map, device_ids)
         latest_probe_map = await asyncio.to_thread(_load_latest_probe_time_map, device_ids)
@@ -310,7 +323,7 @@ async def monitor_loop(stop_event: asyncio.Event, trigger_event: asyncio.Event |
         force_probe = False
 
         for device in due_devices:
-            state = _state_by_ip.setdefault(device.ip_address, ProbeState())
+            state = _state_by_device.setdefault((device.id, device.ip_address), ProbeState())
             if state.current_status is None and device.id in latest_status_map:
                 last_status, last_event_time = latest_status_map[device.id]
                 state.current_status = last_status
@@ -328,7 +341,7 @@ async def monitor_loop(stop_event: asyncio.Event, trigger_event: asyncio.Event |
             checked_at = _now_utc()
             await asyncio.to_thread(_record_probe_metric, device, probe_result, checked_at)
             is_success = probe_result.success
-            state = _state_by_ip.setdefault(device.ip_address, ProbeState())
+            state = _state_by_device.setdefault((device.id, device.ip_address), ProbeState())
             offline_threshold, online_threshold = policy_map.get(
                 device.group_name,
                 (default_offline_threshold, default_online_threshold),

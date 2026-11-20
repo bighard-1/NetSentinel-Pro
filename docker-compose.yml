@@ -12,5 +12,6 @@ services:
       TZ: Asia/Shanghai
       ADMIN_USER: ${ADMIN_USER}
       ADMIN_PASS: ${ADMIN_PASS}
+      APP_SECRET: ${APP_SECRET:-}
       FEISHU_WEBHOOK: ${FEISHU_WEBHOOK}
     restart: unless-stopped

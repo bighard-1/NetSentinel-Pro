@@ -44,10 +44,10 @@ class LoginOut(BaseModel):
     token_type: str = "bearer"
 
 
-def _client_key(request: Request, username: str) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    host = forwarded or (request.client.host if request.client else "unknown")
-    return f"{host}:{username.strip().lower()}"
+def _client_key(request: Request) -> str:
+    # Trusted proxy headers are resolved by the ASGI server. The raw header
+    # can be forged by a client and must not create a new rate-limit bucket.
+    return request.client.host if request.client else "unknown"
 
 
 def _is_login_limited(key: str) -> bool:
@@ -137,7 +137,7 @@ def health_check() -> dict[str, str]:
 def login(payload: LoginRequest, request: Request) -> LoginOut:
     if not is_admin_configured():
         raise HTTPException(status_code=500, detail="ADMIN_USER/ADMIN_PASS not configured")
-    login_key = _client_key(request, payload.username)
+    login_key = _client_key(request)
     if _is_login_limited(login_key):
         log_event(category="auth", message=f"管理员登录被限流: {payload.username}", level="WARNING")
         raise HTTPException(status_code=429, detail="登录失败次数过多，请稍后再试")

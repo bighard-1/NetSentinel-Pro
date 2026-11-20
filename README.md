@@ -165,6 +165,8 @@ docker tag netsentinel-pro:latest ghcr.io/bighard-1/netsentinel-pro:latest
 
 ## 本地开发
 
+需要 Python 3.10 或更新版本。虚拟环境和项目数据会保存在当前项目目录中。
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -173,6 +175,8 @@ ADMIN_USER=admin ADMIN_PASS=change-me uvicorn main:app --reload
 ```
 
 ## 项目自检
+
+自检会在项目目录内创建临时测试目录，并在结束时清理，不会使用系统默认临时目录。
 
 本地 Python 环境：
 
