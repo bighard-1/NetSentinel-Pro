@@ -1,7 +1,6 @@
 """Bounded SQLite deletes for operational history, independent of reports."""
 
 import asyncio
-import os
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
@@ -9,23 +8,17 @@ from sqlalchemy import delete, func, select
 from database import SessionLocal
 from logging_service import log_event
 from models import AlertLog, AlertOutbox, NotificationDelivery, ProbeMetric, SystemLog
+from services.config import load_config
 
 
 BATCH_SIZE = 5000
 RETENTION_DAYS = (
-    (AlertLog, "event_time", "ALERT_RETENTION_DAYS", 90),
-    (ProbeMetric, "checked_at", "PROBE_METRIC_RETENTION_DAYS", 14),
-    (SystemLog, "created_at", "SYSTEM_LOG_RETENTION_DAYS", 30),
-    (NotificationDelivery, "created_at", "NOTIFICATION_DELIVERY_RETENTION_DAYS", 30),
-    (AlertOutbox, "event_time", "ALERT_OUTBOX_RETENTION_DAYS", 90),
+    (AlertLog, "event_time", "alert_retention_days"),
+    (ProbeMetric, "checked_at", "probe_metric_retention_days"),
+    (SystemLog, "created_at", "system_log_retention_days"),
+    (NotificationDelivery, "created_at", "notification_delivery_retention_days"),
+    (AlertOutbox, "event_time", "alert_outbox_retention_days"),
 )
-
-
-def _retention_days(environment_name: str, default: int) -> int:
-    days = int(os.getenv(environment_name, str(default)))
-    if days < 1:
-        raise ValueError(f"{environment_name} must be at least 1 day")
-    return days
 
 
 def _delete_batch(model, time_column: str, cutoff: datetime) -> int:
@@ -53,9 +46,10 @@ def _delete_batch(model, time_column: str, cutoff: datetime) -> int:
 
 async def cleanup_history() -> dict[str, int]:
     now = datetime.now(timezone.utc)
+    config = load_config()
     deleted: dict[str, int] = {}
-    for model, time_column, environment_name, default_days in RETENTION_DAYS:
-        cutoff = now - timedelta(days=_retention_days(environment_name, default_days))
+    for model, time_column, config_field in RETENTION_DAYS:
+        cutoff = now - timedelta(days=getattr(config, config_field))
         total = 0
         while True:
             batch_count = await asyncio.to_thread(_delete_batch, model, time_column, cutoff)

@@ -2,9 +2,9 @@
 
 import base64
 import hashlib
-import os
 
 from cryptography.fernet import Fernet
+from services.config import load_config
 
 
 PREFIX = "enc:v1:"
@@ -12,10 +12,11 @@ MASK = "••••"
 
 
 def _cipher() -> Fernet:
-    secret = os.getenv("APP_SECRET", "").strip()
+    config = load_config()
+    secret = config.app_secret.get_secret_value().strip()
     if not secret:
         # Development-only fallback; production startup requires APP_SECRET.
-        secret = f"{os.getenv('ADMIN_USER', '')}:{os.getenv('ADMIN_PASS', '')}"
+        secret = f"{config.admin_user}:{config.admin_pass.get_secret_value()}"
     key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
     return Fernet(key)
 

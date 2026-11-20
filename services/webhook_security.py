@@ -1,9 +1,10 @@
 """Validate outbound webhook destinations before configuration and delivery."""
 
 import ipaddress
-import os
 import socket
 from urllib.parse import urlsplit
+
+from services.config import AppSettings
 
 
 def validate_webhook_url(value: str) -> str:
@@ -23,7 +24,7 @@ def validate_webhook_url(value: str) -> str:
         raise ValueError("Webhook hostname could not be resolved") from exc
     if not addresses:
         raise ValueError("Webhook hostname could not be resolved")
-    if os.getenv("ALLOW_PRIVATE_WEBHOOK", "false").lower() != "true":
+    if not AppSettings().allow_private_webhook:
         for address in addresses:
             ip = ipaddress.ip_address(address[4][0])
             if not ip.is_global:

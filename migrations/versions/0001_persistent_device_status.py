@@ -24,10 +24,42 @@ NEW_COLUMNS = (
     sa.Column("last_error", sa.String(length=1000), nullable=False, server_default=""),
 )
 
+LEGACY_DEVICE_COLUMNS = (
+    sa.Column("maintenance_until", sa.DateTime(timezone=True)),
+    sa.Column("maintenance_note", sa.String(300), nullable=False, server_default=""),
+    sa.Column("monitoring_state", sa.String(20), nullable=False, server_default="ACTIVE"),
+    sa.Column("probe_type", sa.String(20), nullable=False, server_default="ICMP"),
+    sa.Column("probe_port", sa.Integer()),
+    sa.Column("probe_path", sa.String(500), nullable=False, server_default=""),
+    sa.Column("expected_status", sa.Integer()),
+    sa.Column("probe_interval_seconds", sa.Integer()),
+)
+
+LEGACY_SETTING_COLUMNS = (
+    sa.Column("silence_enabled", sa.Boolean(), nullable=False, server_default=sa.false()),
+    sa.Column("silence_start", sa.String(5), nullable=False, server_default=""),
+    sa.Column("silence_end", sa.String(5), nullable=False, server_default=""),
+    sa.Column("weekly_report_enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
+    sa.Column("weekly_report_day_of_week", sa.String(3), nullable=False, server_default="fri"),
+    sa.Column("weekly_report_time", sa.String(5), nullable=False, server_default="17:00"),
+    sa.Column("weekly_report_timezone", sa.String(64), nullable=False, server_default="Asia/Shanghai"),
+)
+
 
 def upgrade() -> None:
     connection = op.get_bind()
     columns = {column["name"] for column in sa.inspect(connection).get_columns("devices")}
+    for column in LEGACY_DEVICE_COLUMNS:
+        if column.name not in columns:
+            op.add_column("devices", column)
+            if column.name == "monitoring_state":
+                connection.exec_driver_sql(
+                    "UPDATE devices SET monitoring_state = CASE WHEN is_monitoring = 1 THEN 'ACTIVE' ELSE 'PAUSED' END"
+                )
+    setting_columns = {column["name"] for column in sa.inspect(connection).get_columns("system_settings")}
+    for column in LEGACY_SETTING_COLUMNS:
+        if column.name not in setting_columns:
+            op.add_column("system_settings", column)
     for column in NEW_COLUMNS:
         if column.name not in columns:
             op.add_column("devices", column)

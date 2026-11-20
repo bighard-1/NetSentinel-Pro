@@ -17,13 +17,13 @@ import models  # noqa: F401 - Register the allowed SQLite tables
 from engine import monitor_loop
 from alert import alert_dispatch_loop
 from logging_service import log_event, logger
+from services.config import load_config
 from services.migrations import create_database_backup, upgrade_schema
-from services.schema import ensure_default_setting, ensure_schema_columns
+from services.schema import ensure_default_setting
 
 router = APIRouter(prefix="/api", tags=["Backup"])
 
 DB_FILE = DB_DIR / "monitor.db"
-MAX_RESTORE_BYTES = int(os.getenv("MAX_RESTORE_BYTES", str(50 * 1024 * 1024)))
 
 
 def _validate_sqlite_backup(path: Path) -> None:
@@ -108,7 +108,6 @@ def _replace_database(source_path: Path) -> None:
     os.replace(source_path, DB_FILE)
     engine.dispose()
     Base.metadata.create_all(bind=engine)
-    ensure_schema_columns()
     upgrade_schema()
     ensure_default_setting()
 
@@ -125,7 +124,7 @@ async def restore_backup(request: Request, file: UploadFile = File(...), _: None
             total_bytes = 0
             while chunk := file.file.read(1024 * 1024):
                 total_bytes += len(chunk)
-                if total_bytes > MAX_RESTORE_BYTES:
+                if total_bytes > load_config().max_restore_bytes:
                     raise HTTPException(status_code=413, detail="数据库备份文件过大")
                 temp.write(chunk)
         except Exception:

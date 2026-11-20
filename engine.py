@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import os
 import platform
 import re
 import socket
@@ -16,11 +15,12 @@ from sqlalchemy.exc import OperationalError
 from database import SessionLocal
 from logging_service import log_event, logger
 from models import AlertLog, AlertOutbox, Device, EventType, GroupPolicy, MonitoringState, ProbeMetric, ProbeType, SystemSetting
+from services.config import load_config
+from services.state_machine import StatusState, next_state
 
 DEFAULT_MONITOR_INTERVAL_SECONDS = 30
 DEFAULT_OFFLINE_THRESHOLD = 3
 DEFAULT_ONLINE_THRESHOLD = 2
-PROBE_CONCURRENCY = max(1, int(os.getenv("PROBE_CONCURRENCY", "50")))
 
 
 class ProbeInfrastructureError(RuntimeError):
@@ -65,10 +65,11 @@ _http_client: httpx.AsyncClient | None = None
 async def start_http_client() -> None:
     global _http_client
     if _http_client is None:
+        config = load_config()
         _http_client = httpx.AsyncClient(
-            verify=os.getenv("HTTP_VERIFY_TLS", "true").lower() != "false",
-            follow_redirects=os.getenv("HTTP_FOLLOW_REDIRECTS", "false").lower() == "true",
-            headers={"User-Agent": os.getenv("HTTP_USER_AGENT", "NetSentinel-Pro/1.0")},
+            verify=config.http_verify_tls,
+            follow_redirects=config.http_follow_redirects,
+            headers={"User-Agent": config.http_user_agent},
         )
 
 
@@ -158,9 +159,9 @@ async def probe_http(device: Device, timeout_seconds: int = 5) -> ProbeResult:
     try:
         if _http_client is None:
             async with httpx.AsyncClient(
-                verify=os.getenv("HTTP_VERIFY_TLS", "true").lower() != "false",
-                follow_redirects=os.getenv("HTTP_FOLLOW_REDIRECTS", "false").lower() == "true",
-                headers={"User-Agent": os.getenv("HTTP_USER_AGENT", "NetSentinel-Pro/1.0")},
+                verify=load_config().http_verify_tls,
+                follow_redirects=load_config().http_follow_redirects,
+                headers={"User-Agent": load_config().http_user_agent},
             ) as client:
                 response = await client.get(url, timeout=timeout_seconds)
         else:
@@ -280,32 +281,26 @@ def _record_probe_metric_once(
                 checked_at=checked_at,
             )
         )
-        previous_status = current.current_status
         current.last_checked_at = checked_at
-        next_status: EventType | None = None
-        duration_seconds = 0
-        if result.success:
-            current.success_streak = (current.success_streak or 0) + 1
-            current.failure_streak = 0
-            current.last_success_at = checked_at
-            current.last_error = ""
-            if previous_status is None or (
-                previous_status == EventType.OFFLINE and current.success_streak >= online_threshold
-            ):
-                next_status = EventType.ONLINE
-                if previous_status == EventType.OFFLINE and current.status_since is not None:
-                    duration_seconds = max(0, int((checked_at - _as_utc(current.status_since)).total_seconds()))
-        else:
-            current.failure_streak = (current.failure_streak or 0) + 1
-            current.success_streak = 0
-            current.last_error = result.error[:1000]
-            if current.failure_streak >= offline_threshold and previous_status != EventType.OFFLINE:
-                next_status = EventType.OFFLINE
-
         in_maintenance = current.maintenance_until is not None and _as_utc(current.maintenance_until) > checked_at
+        transition = next_state(
+            StatusState(current.current_status, current.status_since,
+                        current.success_streak or 0, current.failure_streak or 0,
+                        current.last_success_at, current.last_error or ""),
+            success=result.success, checked_at=checked_at, error=result.error,
+            offline_threshold=offline_threshold, online_threshold=online_threshold,
+            in_maintenance=in_maintenance,
+        )
+        current.current_status = transition.state.status
+        current.status_since = transition.state.since
+        current.success_streak = transition.state.success_streak
+        current.failure_streak = transition.state.failure_streak
+        current.last_success_at = transition.state.last_success_at
+        current.last_error = transition.state.last_error
+        next_status = transition.event
+        duration_seconds = transition.duration_seconds
+
         if next_status is not None:
-            current.current_status = next_status
-            current.status_since = checked_at
             event = AlertLog(
                 device_id=current.id,
                 event_type=next_status,
@@ -314,7 +309,7 @@ def _record_probe_metric_once(
             )
             session.add(event)
             session.flush()
-            if not in_maintenance:
+            if transition.notify:
                 session.add(AlertOutbox(
                     alert_log_id=event.id,
                     device_id=current.id,
@@ -396,7 +391,7 @@ async def _monitor_round(force_probe: bool) -> tuple[int, int, int, list[Device]
 
     latest_probe_map = {device.id: device.last_checked_at for device in devices if device.last_checked_at is not None}
     due_devices = _due_devices(devices, latest_probe_map, monitor_interval, _now_utc(), force_probe)
-    semaphore = asyncio.Semaphore(PROBE_CONCURRENCY)
+    semaphore = asyncio.Semaphore(load_config().probe_concurrency)
 
     async def limited_probe(device: Device) -> ProbeResult:
         async with semaphore:

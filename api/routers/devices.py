@@ -17,10 +17,9 @@ from services.device_status import (
     as_device_out,
     device_uptime_percent_7d,
     load_current_device_statuses,
-    load_latest_probe_map,
-    load_latest_status_map,
     load_probe_interval_seconds,
 )
+from services.device_targets import existing_target as _existing_target, target_key as _target_key
 from validators import normalize_host_identifier
 
 router = APIRouter(prefix="/api/devices", tags=["Devices"])
@@ -193,9 +192,7 @@ def _probe_metric_out(metric: ProbeMetric) -> ProbeMetricOut:
 
 
 def _device_out(device: Device) -> DeviceOut:
-    latest_map = load_latest_status_map([device.id])
-    probe_map = load_latest_probe_map([device.id])
-    return as_device_out(device, latest_map, probe_map, load_probe_interval_seconds())
+    return as_device_out(device, {}, {}, load_probe_interval_seconds())
 
 
 def _alert_history_out(alert: AlertLog, device: Device) -> AlertHistoryOut:
@@ -404,7 +401,7 @@ def _parse_deleted_snapshot_rows(csv_text: str) -> list[dict]:
     return rows
 
 
-def _deleted_snapshot_device_out(row: dict, existing_ips: set[str]) -> DeletedSnapshotDeviceOut:
+def _deleted_snapshot_device_out(row: dict, existing_targets: set[tuple[str, str, int, str]]) -> DeletedSnapshotDeviceOut:
     return DeletedSnapshotDeviceOut(
         row_index=row["row_index"],
         old_id=row["old_id"],
@@ -419,7 +416,7 @@ def _deleted_snapshot_device_out(row: dict, existing_ips: set[str]) -> DeletedSn
         probe_interval_seconds=row["probe_interval_seconds"],
         maintenance_until=row["maintenance_until"],
         maintenance_note=row["maintenance_note"],
-        exists=row["ip_address"] in existing_ips,
+        exists=_target_key(row["ip_address"], row["probe_type"], row["probe_port"], row["probe_path"]) in existing_targets,
     )
 
 
@@ -466,10 +463,15 @@ def export_devices_csv(request: Request, operator: str = Depends(current_admin_s
 def get_deleted_snapshot(log_id: int, _: None = Depends(verify_admin_token)) -> DeletedSnapshotOut:
     with SessionLocal() as session:
         rows = _load_deleted_snapshot_rows(session, log_id)
-        existing_ips = set(session.execute(select(Device.ip_address)).scalars().all())
+        existing_targets = {
+            _target_key(ip, probe_type, port, path)
+            for ip, probe_type, port, path in session.execute(
+                select(Device.ip_address, Device.probe_type, Device.probe_port, Device.probe_path)
+            )
+        }
         return DeletedSnapshotOut(
             log_id=log_id,
-            rows=[_deleted_snapshot_device_out(row, existing_ips) for row in rows],
+            rows=[_deleted_snapshot_device_out(row, existing_targets) for row in rows],
         )
 
 
@@ -560,6 +562,7 @@ def restore_deleted_snapshot(
     selected_indexes = sorted(set(payload.row_indexes))
     restored_targets: list[str] = []
     skipped = 0
+    restored_keys: set[tuple[str, str, int, str]] = set()
     with SessionLocal() as session:
         rows = _load_deleted_snapshot_rows(session, log_id)
         rows_by_index = {row["row_index"]: row for row in rows}
@@ -568,10 +571,12 @@ def restore_deleted_snapshot(
 
         for index in selected_indexes:
             row = rows_by_index[index]
-            exists = session.execute(select(Device.id).where(Device.ip_address == row["ip_address"])).scalar_one_or_none()
-            if exists is not None:
+            key = _target_key(row["ip_address"], row["probe_type"], row["probe_port"], row["probe_path"])
+            if key in restored_keys or _existing_target(session, row["ip_address"], row["probe_type"],
+                                row["probe_port"], row["probe_path"]):
                 skipped += 1
                 continue
+            restored_keys.add(key)
             device = Device(
                 name=row["name"],
                 ip_address=row["ip_address"],
@@ -672,11 +677,9 @@ def get_device_detail(device_id: int, _: None = Depends(verify_admin_token)) -> 
             failures = len([m for m in metrics_24h if not m.success])
             packet_loss = round((failures / len(metrics_24h)) * 100, 2)
 
-        latest_map = load_latest_status_map([device.id])
-        probe_map = load_latest_probe_map([device.id])
         probe_interval = load_probe_interval_seconds()
         return DeviceDetailOut(
-            device=as_device_out(device, latest_map, probe_map, probe_interval),
+            device=as_device_out(device, {}, {}, probe_interval),
             alerts=[_alert_history_out(alert, device) for alert in alert_rows],
             alerts_24h=int(alerts_24h),
             offline_count_7d=int(offline_count_7d),
@@ -733,9 +736,9 @@ def update_device_maintenance(
 @router.post("", response_model=DeviceOut)
 def create_device(payload: DeviceCreate, operator: str = Depends(current_admin_subject)) -> DeviceOut:
     with SessionLocal() as session:
-        exists = session.execute(select(Device).where(Device.ip_address == payload.ip_address)).scalar_one_or_none()
-        if exists is not None:
-            raise HTTPException(status_code=400, detail="ip_address already exists")
+        if _existing_target(session, payload.ip_address, payload.probe_type,
+                            payload.probe_port, payload.probe_path):
+            raise HTTPException(status_code=400, detail="probe target already exists")
 
         _validate_probe_config(payload.probe_type, payload.probe_port, payload.probe_path, payload.expected_status)
         monitoring_state = _resolve_initial_monitoring_state(payload)
@@ -769,13 +772,16 @@ def create_device(payload: DeviceCreate, operator: str = Depends(current_admin_s
 def create_devices_bulk(payload: DeviceBulkCreate, operator: str = Depends(current_admin_subject)) -> dict[str, int | str]:
     imported = 0
     skipped = 0
+    seen_targets: set[tuple[str, str, int, str]] = set()
     with SessionLocal() as session:
         for item in payload.devices:
             _validate_probe_config(item.probe_type, item.probe_port, item.probe_path, item.expected_status)
-            exists = session.execute(select(Device.id).where(Device.ip_address == item.ip_address)).scalar_one_or_none()
-            if exists is not None:
+            target = _target_key(item.ip_address, item.probe_type, item.probe_port, item.probe_path)
+            if target in seen_targets or _existing_target(session, item.ip_address, item.probe_type,
+                                                          item.probe_port, item.probe_path):
                 skipped += 1
                 continue
+            seen_targets.add(target)
             monitoring_state = _resolve_initial_monitoring_state(item)
             session.add(
                 Device(
@@ -907,13 +913,6 @@ def update_device(device_id: int, payload: DeviceUpdate, operator: str = Depends
             device.expected_status,
         )
 
-        if payload.ip_address is not None and payload.ip_address != device.ip_address:
-            exists = session.execute(
-                select(Device).where(Device.ip_address == payload.ip_address, Device.id != device_id)
-            ).scalar_one_or_none()
-            if exists is not None:
-                raise HTTPException(status_code=400, detail="ip_address already exists")
-
         if payload.name is not None:
             device.name = payload.name.strip()
         if payload.ip_address is not None:
@@ -945,6 +944,9 @@ def update_device(device_id: int, payload: DeviceUpdate, operator: str = Depends
             probe_path = ""
             expected_status = None
         _validate_probe_config(probe_type, probe_port, probe_path or "", expected_status)
+        if _existing_target(session, device.ip_address, probe_type, probe_port,
+                            probe_path or "", exclude_id=device_id):
+            raise HTTPException(status_code=400, detail="probe target already exists")
         device.probe_type = probe_type
         device.probe_port = probe_port
         device.probe_path = (probe_path or "").strip()

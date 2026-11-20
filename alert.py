@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import smtplib
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
@@ -21,12 +20,10 @@ from models import (
     NotificationDelivery,
     SystemSetting,
 )
+from services.config import load_config
 from services.secrets import decrypt_secret
 from services.webhook_security import validate_webhook_url
 
-FEISHU_WEBHOOK_ENV = "FEISHU_WEBHOOK"
-ALERT_BATCH_INTERVAL_SECONDS = max(1, int(os.getenv("ALERT_BATCH_INTERVAL_SECONDS", "5")))
-ALERT_STORM_THRESHOLD = max(2, int(os.getenv("ALERT_STORM_THRESHOLD", "3")))
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 @dataclass
@@ -75,7 +72,7 @@ def _load_notification_policy(group_name: str | None = None) -> tuple[str, bool,
 
     if webhook:
         return webhook, silence_enabled, silence_start, silence_end
-    return os.getenv(FEISHU_WEBHOOK_ENV, "").strip(), silence_enabled, silence_start, silence_end
+    return load_config().feishu_webhook.get_secret_value().strip(), silence_enabled, silence_start, silence_end
 
 
 def _resolve_feishu_webhook(group_name: str | None = None) -> str:
@@ -235,12 +232,13 @@ async def _post_json(endpoint: str, payload: dict) -> DeliveryResult:
 
 
 def _send_email_sync(channel: NotificationChannel, subject: str, body: str) -> DeliveryResult:
-    smtp_host = os.getenv("SMTP_HOST", "").strip()
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER", "").strip()
-    smtp_pass = os.getenv("SMTP_PASS", "").strip()
-    smtp_from = os.getenv("SMTP_FROM", smtp_user).strip()
-    smtp_tls = os.getenv("SMTP_TLS", "true").strip().lower() != "false"
+    config = load_config()
+    smtp_host = config.smtp_host.strip()
+    smtp_port = config.smtp_port
+    smtp_user = config.smtp_user.strip()
+    smtp_pass = config.smtp_pass.get_secret_value().strip()
+    smtp_from = (config.smtp_from or smtp_user).strip()
+    smtp_tls = config.smtp_tls
     recipients = [item.strip() for item in channel.endpoint.split(",") if item.strip()]
     if not smtp_host or not smtp_from or not recipients:
         return DeliveryResult(success=False, error="邮件渠道缺少 SMTP 配置或收件人")
@@ -644,7 +642,7 @@ async def _dispatch_pending_batch() -> None:
             by_group.setdefault(item.group_name, []).append(item)
     grouped_ids: set[int] = set()
     for group_events in by_group.values():
-        if len(group_events) >= ALERT_STORM_THRESHOLD:
+        if len(group_events) >= load_config().alert_storm_threshold:
             await _dispatch_outbox_summary(group_events)
             grouped_ids.update(item.id for item in group_events)
     for item in events:
@@ -655,7 +653,7 @@ async def _dispatch_pending_batch() -> None:
 async def alert_dispatch_loop(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=ALERT_BATCH_INTERVAL_SECONDS)
+            await asyncio.wait_for(stop_event.wait(), timeout=load_config().alert_batch_interval_seconds)
         except asyncio.TimeoutError:
             pass
         if stop_event.is_set():

@@ -6,6 +6,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -27,20 +28,15 @@ from auth import (create_admin_token, credential_role, is_admin_configured,
 from database import Base, engine
 from engine import close_http_client, monitor_health, monitor_loop, shutdown_monitor_task, start_http_client
 from logging_service import configure_logging, log_event, logger
-from services.report_scheduler import schedule_weekly_report_job
+from services.report_scheduler import load_weekly_report_config, schedule_weekly_report_job
 from services.migrations import backup_before_upgrade, upgrade_schema
+from services.config import load_config
 from services.retention import cleanup_history
-from services.schema import ensure_default_setting, ensure_schema_columns
+from services.schema import ensure_default_setting
 import models  # noqa: F401 - Ensure model metadata is registered
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-LOGIN_WINDOW_SECONDS = int(os.getenv("LOGIN_WINDOW_SECONDS", "300"))
-LOGIN_MAX_FAILURES = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
-LOGIN_MAX_BUCKETS = max(100, int(os.getenv("LOGIN_MAX_BUCKETS", "10000")))
-MAX_BULK_IMPORT_BYTES = max(1024, int(os.getenv("MAX_BULK_IMPORT_BYTES", str(1024 * 1024))))
-TRUSTED_PROXIES = {item.strip() for item in os.getenv("TRUSTED_PROXIES", "").split(",") if item.strip()}
-
 _login_failures: dict[str, list[float]] = {}
 
 
@@ -57,7 +53,8 @@ class LoginOut(BaseModel):
 
 def _client_key(request: Request) -> str:
     peer = request.client.host if request.client else "unknown"
-    if peer not in TRUSTED_PROXIES:
+    trusted_proxies = {item.strip() for item in load_config().trusted_proxies.split(",") if item.strip()}
+    if peer not in trusted_proxies:
         return peer
     forwarded = request.headers.get("x-forwarded-for", "")
     for address in reversed([part.strip() for part in forwarded.split(",") if part.strip()]):
@@ -65,32 +62,34 @@ def _client_key(request: Request) -> str:
             ipaddress.ip_address(address)
         except ValueError:
             continue
-        if address not in TRUSTED_PROXIES:
+        if address not in trusted_proxies:
             return address
     return peer
 
 
 def _is_login_limited(key: str) -> bool:
     now = time.time()
-    failures = [ts for ts in _login_failures.get(key, []) if now - ts < LOGIN_WINDOW_SECONDS]
+    config = load_config()
+    failures = [ts for ts in _login_failures.get(key, []) if now - ts < config.login_window_seconds]
     if failures:
         _login_failures[key] = failures
     else:
         _login_failures.pop(key, None)
-    return len(failures) >= LOGIN_MAX_FAILURES
+    return len(failures) >= config.login_max_failures
 
 
 def _record_login_failure(key: str) -> None:
     now = time.time()
-    failures = [ts for ts in _login_failures.get(key, []) if now - ts < LOGIN_WINDOW_SECONDS]
+    config = load_config()
+    failures = [ts for ts in _login_failures.get(key, []) if now - ts < config.login_window_seconds]
     failures.append(now)
     _login_failures[key] = failures
-    if len(_login_failures) > LOGIN_MAX_BUCKETS:
+    if len(_login_failures) > config.login_max_buckets:
         expired = [name for name, timestamps in _login_failures.items()
-                   if not timestamps or now - timestamps[-1] >= LOGIN_WINDOW_SECONDS]
+                   if not timestamps or now - timestamps[-1] >= config.login_window_seconds]
         for name in expired:
             _login_failures.pop(name, None)
-        while len(_login_failures) > LOGIN_MAX_BUCKETS:
+        while len(_login_failures) > config.login_max_buckets:
             _login_failures.pop(next(iter(_login_failures)))
 
 
@@ -101,13 +100,15 @@ def _clear_login_failures(key: str) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
-    if os.getenv("APP_ENV", "development").lower() == "production" and not os.getenv("APP_SECRET", "").strip():
-        raise RuntimeError("APP_SECRET must be set in production")
+    try:
+        config = load_config()
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    logger.info("Effective configuration: %s", config.safe_summary())
     if weak_admin_password():
         logger.warning("Administrator password is weak; change ADMIN_PASS")
     backup_path = backup_before_upgrade()
     Base.metadata.create_all(bind=engine)
-    ensure_schema_columns()
     upgrade_schema()
     ensure_default_setting()
     if backup_path is not None:
@@ -127,7 +128,7 @@ async def lifespan(app: FastAPI):
         alert_dispatch_loop(app.state.alert_stop_event)
     )
 
-    app.state.scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
+    app.state.scheduler = AsyncIOScheduler(timezone=ZoneInfo(str(load_weekly_report_config()["timezone"])))
     schedule_weekly_report_job(app.state.scheduler)
     app.state.scheduler.add_job(
         cleanup_history,
@@ -185,7 +186,7 @@ async def add_security_headers(request: Request, call_next):
             length = int(request.headers["content-length"])
         except ValueError:
             return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
-        if length > MAX_BULK_IMPORT_BYTES:
+        if length > load_config().max_bulk_import_bytes:
             return JSONResponse(status_code=413, content={"detail": "Bulk import is too large"})
     response: Response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -194,7 +195,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     if path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
-    if os.getenv("ENABLE_HSTS", "false").lower() == "true":
+    if load_config().enable_hsts:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
@@ -255,7 +256,7 @@ def login(payload: LoginRequest, request: Request) -> LoginOut:
     if _is_login_limited(ip_key) or _is_login_limited(username_key):
         time.sleep(0.15)
         log_event(category="auth", message=f"管理员登录被限流: {payload.username}", level="WARNING")
-        raise HTTPException(status_code=429, detail="登录失败次数过多，请稍后再试", headers={"Retry-After": str(LOGIN_WINDOW_SECONDS)})
+        raise HTTPException(status_code=429, detail="登录失败次数过多，请稍后再试", headers={"Retry-After": str(load_config().login_window_seconds)})
     role = credential_role(payload.username, payload.password)
     if role is None:
         time.sleep(0.15)

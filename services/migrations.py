@@ -11,6 +11,7 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 
 from database import DB_DIR, engine
+from services.config import load_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -54,7 +55,18 @@ def create_database_backup(prefix: str) -> Path:
     except Exception:
         backup_path.unlink(missing_ok=True)
         raise
+    prune_database_backups(prefix, load_config().backup_retention_count)
     return backup_path
+
+
+def prune_database_backups(prefix: str, keep: int) -> None:
+    """Retain the newest valid copies for one backup family only."""
+    if keep < 1 or not prefix or any(char in prefix for char in "/\\*"):
+        raise ValueError("Invalid backup retention policy")
+    backup_dir = DB_DIR / "backups"
+    backups = sorted(backup_dir.glob(f"{prefix}-*.db"), key=lambda path: path.name, reverse=True)
+    for old_backup in backups[keep:]:
+        old_backup.unlink()
 
 
 def upgrade_schema() -> None:

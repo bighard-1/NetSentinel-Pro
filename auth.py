@@ -2,7 +2,6 @@ import base64
 import hashlib
 import hmac
 import json
-import os
 import secrets
 import time
 from datetime import datetime, timezone
@@ -10,13 +9,12 @@ from typing import Any
 
 from database import SessionLocal
 from models import RevokedToken
-
-
-TOKEN_TTL_SECONDS = int(os.getenv("ADMIN_TOKEN_TTL_SECONDS", "43200"))
+from services.config import load_config
 
 
 def _admin_credentials() -> tuple[str, str]:
-    return os.getenv("ADMIN_USER", "").strip(), os.getenv("ADMIN_PASS", "").strip()
+    config = load_config()
+    return config.admin_user.strip(), config.admin_pass.get_secret_value().strip()
 
 
 def is_admin_configured() -> bool:
@@ -33,8 +31,9 @@ def verify_admin_credentials(username: str, password: str) -> bool:
 
 def credential_role(username: str, password: str) -> str | None:
     admin_user, admin_pass = _admin_credentials()
-    viewer_user = os.getenv("VIEWER_USER", "").strip()
-    viewer_pass = os.getenv("VIEWER_PASS", "").strip()
+    config = load_config()
+    viewer_user = config.viewer_user.strip()
+    viewer_pass = config.viewer_pass.get_secret_value().strip()
     admin_match = bool(admin_user and admin_pass) and hmac.compare_digest(username, admin_user) and hmac.compare_digest(password, admin_pass)
     viewer_match = bool(viewer_user and viewer_pass) and hmac.compare_digest(username, viewer_user) and hmac.compare_digest(password, viewer_pass)
     return "admin" if admin_match else "viewer" if viewer_match else None
@@ -47,7 +46,7 @@ def weak_admin_password() -> bool:
 
 def _signing_secret() -> bytes:
     admin_user, admin_pass = _admin_credentials()
-    extra_secret = os.getenv("APP_SECRET", "").strip()
+    extra_secret = load_config().app_secret.get_secret_value().strip()
     raw = f"{admin_user}:{admin_pass}:{extra_secret}".encode("utf-8")
     return hashlib.sha256(raw).digest()
 
@@ -68,7 +67,7 @@ def create_admin_token(username: str, role: str = "admin") -> str:
     payload = {
         "sub": username,
         "iat": now,
-        "exp": now + TOKEN_TTL_SECONDS,
+        "exp": now + load_config().admin_token_ttl_seconds,
         "scope": role,
         "jti": secrets.token_urlsafe(18),
     }

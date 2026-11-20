@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from database import Base
+from services.utc_datetime import UTCDateTime
 
 
 class EventType(str, enum.Enum):
@@ -37,11 +38,11 @@ class Device(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    ip_address: Mapped[str] = mapped_column(String(253), nullable=False, unique=True, index=True)
+    ip_address: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
     group_name: Mapped[str] = mapped_column(String(100), nullable=False, default="default")
     is_monitoring: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     monitoring_state: Mapped[MonitoringState] = mapped_column(Enum(MonitoringState), nullable=False, default=MonitoringState.ACTIVE)
-    maintenance_until: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    maintenance_until: Mapped[DateTime | None] = mapped_column(UTCDateTime(), nullable=True)
     maintenance_note: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     probe_type: Mapped[ProbeType] = mapped_column(Enum(ProbeType), nullable=False, default=ProbeType.ICMP)
     probe_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -50,9 +51,9 @@ class Device(Base):
     probe_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     probe_retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     current_status: Mapped[EventType | None] = mapped_column(Enum(EventType), nullable=True)
-    status_since: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_checked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_success_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status_since: Mapped[DateTime | None] = mapped_column(UTCDateTime(), nullable=True)
+    last_checked_at: Mapped[DateTime | None] = mapped_column(UTCDateTime(), nullable=True)
+    last_success_at: Mapped[DateTime | None] = mapped_column(UTCDateTime(), nullable=True)
     success_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failure_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
@@ -64,6 +65,10 @@ class Device(Base):
     )
 
 
+Index("uq_devices_target", Device.ip_address, Device.probe_type,
+      func.coalesce(Device.probe_port, 0), Device.probe_path, unique=True)
+
+
 class AlertLog(Base):
     __tablename__ = "alert_logs"
     __table_args__ = (Index("ix_alert_logs_device_id_id", "device_id", "id"),)
@@ -71,7 +76,7 @@ class AlertLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)
     event_type: Mapped[EventType] = mapped_column(Enum(EventType), nullable=False)
-    event_time: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    event_time: Mapped[DateTime] = mapped_column(UTCDateTime(), server_default=func.now(), nullable=False)
     duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     device: Mapped[Device] = relationship("Device", back_populates="alert_logs")
@@ -87,10 +92,10 @@ class AlertOutbox(Base):
     ip_address: Mapped[str] = mapped_column(String(253), nullable=False)
     group_name: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
-    event_time: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False)
+    event_time: Mapped[DateTime] = mapped_column(UTCDateTime(), nullable=False)
     delivery_status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", index=True)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    next_attempt_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    next_attempt_at: Mapped[DateTime] = mapped_column(UTCDateTime(), nullable=False, server_default=func.now(), index=True)
     channel_ids: Mapped[str] = mapped_column(Text, nullable=False, default="")
     delivered_channel_ids: Mapped[str] = mapped_column(Text, nullable=False, default="")
     last_error: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
@@ -100,7 +105,7 @@ class RevokedToken(Base):
     __tablename__ = "revoked_tokens"
 
     jti: Mapped[str] = mapped_column(String(64), primary_key=True)
-    expires_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    expires_at: Mapped[DateTime] = mapped_column(UTCDateTime(), nullable=False, index=True)
 
 
 class ProbeMetric(Base):
@@ -114,7 +119,7 @@ class ProbeMetric(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    checked_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    checked_at: Mapped[DateTime] = mapped_column(UTCDateTime(), server_default=func.now(), nullable=False, index=True)
 
 
 class SystemSetting(Base):
@@ -132,6 +137,7 @@ class SystemSetting(Base):
     weekly_report_day_of_week: Mapped[str] = mapped_column(String(3), nullable=False, default="fri")
     weekly_report_time: Mapped[str] = mapped_column(String(5), nullable=False, default="17:00")
     weekly_report_timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Shanghai")
+    weekly_report_last_sent_at: Mapped[DateTime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class GroupPolicy(Base):
@@ -172,7 +178,7 @@ class NotificationDelivery(Base):
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str] = mapped_column(Text, nullable=False, default="")
     response_excerpt: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    created_at: Mapped[DateTime] = mapped_column(UTCDateTime(), server_default=func.now(), nullable=False, index=True)
 
 
 class GroupNotificationRoute(Base):
@@ -192,4 +198,4 @@ class SystemLog(Base):
     message: Mapped[str] = mapped_column(String(500), nullable=False)
     device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="SET NULL"), nullable=True, index=True)
     details: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    created_at: Mapped[DateTime] = mapped_column(UTCDateTime(), server_default=func.now(), nullable=False, index=True)

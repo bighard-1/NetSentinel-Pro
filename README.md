@@ -56,7 +56,7 @@ NetSentinel Pro 是一套面向内网资产的轻量级 NOC 监控系统，适�
 - 批量删除前自动生成 CSV 快照，保存至 `data/audit/`。
 - 删除快照内容同时写入日志详情，可按设备名/IP 检索。
 - 控制台提供“删除快照”管理页，支持按时间、操作者、设备名/IP 搜索。
-- 支持从删除快照中选择部分设备恢复，已存在相同 IP 的设备自动跳过。
+- 支持从删除快照中选择部分设备恢复，已存在相同 IP、探测类型、端口及路径组合的目标自动跳过。
 - 控制台提供“操作审计”时间线，统一查看新增、编辑、暂停、停止、启用、恢复、删除等高风险动作。
 
 ### 数据与运维
@@ -114,6 +114,7 @@ PROBE_METRIC_RETENTION_DAYS=14
 SYSTEM_LOG_RETENTION_DAYS=30
 NOTIFICATION_DELIVERY_RETENTION_DAYS=30
 ALERT_OUTBOX_RETENTION_DAYS=90
+BACKUP_RETENTION_COUNT=10
 PROBE_CONCURRENCY=50
 HTTP_VERIFY_TLS=true
 HTTP_FOLLOW_REDIRECTS=false
@@ -121,6 +122,29 @@ HTTP_USER_AGENT=NetSentinel-Pro/1.0
 ALERT_BATCH_INTERVAL_SECONDS=5
 ALERT_STORM_THRESHOLD=3
 ```
+
+环境变量由 `services/config.py` 在启动时统一校验，日志只输出非敏感的有效值。未列出的变量使用下表默认值；生产模式下 `APP_SECRET` 必填。
+
+| 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `APP_ENV` | `development` | 设置为 `production` 时强制要求 `APP_SECRET` |
+| `ADMIN_USER` / `ADMIN_PASS` | 空 | 管理员账户 |
+| `VIEWER_USER` / `VIEWER_PASS` | 空 | 可选只读账户 |
+| `APP_SECRET` | 空 | 令牌签名和渠道密钥加密；更换前须迁移已有密文 |
+| `ADMIN_TOKEN_TTL_SECONDS` | `43200` | 令牌有效期，60 至 604800 秒 |
+| `LOGIN_WINDOW_SECONDS` / `LOGIN_MAX_FAILURES` / `LOGIN_MAX_BUCKETS` | `300` / `5` / `10000` | 登录限流窗口、次数、内存桶上限 |
+| `MAX_RESTORE_BYTES` / `MAX_BULK_IMPORT_BYTES` | `52428800` / `1048576` | 恢复文件和批量导入请求上限 |
+| `PROBE_CONCURRENCY` | `50` | 同时探测上限，1 至 1000 |
+| `HTTP_VERIFY_TLS` / `HTTP_FOLLOW_REDIRECTS` | `true` / `false` | HTTP 探测 TLS 校验与跳转 |
+| `HTTP_USER_AGENT` | `NetSentinel-Pro/1.0` | HTTP 探测请求标识 |
+| `ALERT_BATCH_INTERVAL_SECONDS` / `ALERT_STORM_THRESHOLD` | `5` / `3` | 告警汇总窗口和风暴合并阈值 |
+| `ALERT_RETENTION_DAYS` / `PROBE_METRIC_RETENTION_DAYS` | `90` / `14` | 告警事件和探测指标保留天数 |
+| `SYSTEM_LOG_RETENTION_DAYS` / `NOTIFICATION_DELIVERY_RETENTION_DAYS` / `ALERT_OUTBOX_RETENTION_DAYS` | `30` / `30` / `90` | 日志、投递记录与告警队列保留天数 |
+| `BACKUP_RETENTION_COUNT` | `10` | 各类升级前和恢复前备份分别保留最近 N 份 |
+| `ENABLE_DOCS` / `ENABLE_HSTS` | `false` / `false` | API 文档和 HSTS 响应头 |
+| `ALLOW_PRIVATE_WEBHOOK` / `TRUSTED_PROXIES` | `false` / 空 | 内网 Webhook 例外、可信代理 IP 列表 |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` / `SMTP_TLS` | 空 / `587` / 空 / 空 / 空 / `true` | 邮件渠道配置 |
+| `FEISHU_WEBHOOK` | 空 | 未配置通知渠道时的兼容发送地址 |
 
 邮件通知配置：
 
@@ -195,9 +219,12 @@ location / {
 
 启动时会检查数据库迁移版本。需要升级旧库时，系统先在 `data/backups/` 创建通过完整性检查的在线备份，然后应用 Alembic 迁移。若迁移失败，应停止服务、保留原库与升级前备份，再从备份恢复。`GET /health/ready` 会检查后台任务、监控心跳与数据库连接；容器健康检查使用此接口。
 
+P3 迁移将设备唯一标识改为 IP、探测类型、端口、路径的组合；同一个 IP 可添加不同 TCP 端口或 HTTP 路径。旧库升级前的备份按 `BACKUP_RETENTION_COUNT` 每类保留最近 N 份。升级失败时先停止服务，将最新的 `data/backups/monitor-pre-upgrade-*.db` 复制到 `data/monitor.db`，确认文件属主与权限，然后重新启动旧版程序。恢复操作失败时使用 `monitor-pre-restore-*.db` 同样回滚；操作前应另存当前数据库和 WAL 文件以便调查。SQLite 在线备份包含已提交的 WAL 数据。时间在 API 中使用带 `+00:00` 时区的 UTC 格式，浏览器按本地时区显示。
+
 恢复上传时系统会先暂停后台监控与通知，备份当前库，验证上传库，再原子替换并迁移；恢复失败会用恢复前备份回滚。状态事件与待发送告警在同一事务提交；通知逐渠道记录成功结果，失败按指数退避最多尝试 5 次，超出后标记为 `DEAD` 以供排查。`ALERT_BATCH_INTERVAL_SECONDS` 控制告警汇总窗口，单组离线事件达到 `ALERT_STORM_THRESHOLD` 后发送合并通知。
 
 1000 台模拟设备的 P1 压测结果见 [压测报告](docs/benchmarks/p1-1000-devices.md)。
+P3 数据模型升级后的复测结果见 [P3 压测报告](docs/benchmarks/p3-1000-devices.md)。
 
 ## 构建 x86 Docker 镜像
 
