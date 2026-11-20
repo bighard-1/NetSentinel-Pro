@@ -2,6 +2,8 @@
 
 当前正式 API 路径以 `/api/v1` 开头，旧版 `/api` 路径保留为兼容别名；下表中的 `/api/...` 路径均可替换为 `/api/v1/...`。`/health` 与 `/health/ready` 为公开探针。除登录接口外，API 请求须带 `Authorization: Bearer <token>`。可选 viewer 账户只读，写请求返回 403。默认关闭交互式 OpenAPI；在可信开发环境设置 `ENABLE_DOCS=true` 后可访问 `/docs` 和 `/openapi.json`，文档仅列出 `/api/v1` 路径。
 
+每个 HTTP 响应附带 `X-Request-ID`，对应 JSON 运行日志中的 `request_id`，可用于追踪单次请求。
+
 ## 认证与系统（Auth / System）
 
 | 方法 | 路径 | 说明 |

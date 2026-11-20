@@ -4,6 +4,7 @@ import ipaddress
 import os
 import secrets
 import time
+import uuid
 from contextlib import asynccontextmanager
 from collections import deque
 from datetime import datetime, timezone
@@ -37,7 +38,7 @@ from auth import (
 )
 from database import Base, engine
 from engine import close_http_client, monitor_health, monitor_loop, shutdown_monitor_task, start_http_client
-from logging_service import configure_logging, log_event, logger
+from logging_service import configure_logging, log_event, logger, request_id_context
 from services.api_audit import audit_write, safe_summary
 from services.report_scheduler import load_weekly_report_config, schedule_weekly_report_job
 from services.migrations import (
@@ -147,11 +148,11 @@ def _api_retry_after(token: str, request: Request) -> int:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    configure_logging()
     try:
         config = load_config()
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
+    configure_logging()
     logger.info("Effective configuration: %s", config.safe_summary())
     if weak_admin_password():
         logger.warning("Administrator password is weak; change ADMIN_PASS")
@@ -440,3 +441,15 @@ def version_status() -> dict[str, str]:
         "migration_head": head,
         "migration_status": "current" if current == head else "outdated",
     }
+
+
+@app.middleware("http")
+async def attach_request_id(request: Request, call_next):
+    request_id = uuid.uuid4().hex
+    context_token = request_id_context.set(request_id)
+    try:
+        response: Response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        request_id_context.reset(context_token)

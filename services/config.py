@@ -3,6 +3,8 @@
 from functools import lru_cache
 from urllib.parse import urlsplit
 
+from typing import Literal
+
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,6 +24,9 @@ class AppSettings(BaseSettings):
     login_max_buckets: int = Field(default=10000, ge=100)
     api_rate_limit_per_minute: int = Field(default=600, ge=1)
     api_rate_limit_buckets: int = Field(default=10000, ge=100)
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    log_max_bytes: int = Field(default=10485760, ge=1024)
+    log_backup_count: int = Field(default=5, ge=1, le=100)
     max_restore_bytes: int = Field(default=52428800, ge=1024)
     max_bulk_import_bytes: int = Field(default=1048576, ge=1024)
     probe_concurrency: int = Field(default=50, ge=1, le=1000)

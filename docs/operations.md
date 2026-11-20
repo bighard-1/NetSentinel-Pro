@@ -7,6 +7,7 @@
 - `GET /health` 只表示 HTTP 进程可响应。
 - `GET /health/ready` 检查后台监控/告警任务、最近探测心跳和数据库连接；503 应触发运维排查。
 - 查看 `data/monitor.db`、`data/monitor.db-wal`、`data/backups/` 与 `data/audit/` 的剩余空间和权限。
+- 运行日志为 JSON 行格式，写入标准错误输出和 `data/logs/app.jsonl`；单文件默认 10 MiB、保留 5 个轮转文件。API 响应的 `X-Request-ID` 可用于关联同一次请求的日志；设备事件含 `device_id`。
 - 每次升级后执行 `python scripts/self_check.py`，并检查通知渠道测试发送的投递记录。
 
 ## 容量规划
