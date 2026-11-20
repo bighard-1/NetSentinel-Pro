@@ -2,6 +2,43 @@
 
 NetSentinel Pro 是一套面向内网资产的轻量级 NOC 监控系统，适合长期值守服务器、交换机管理地址、防火墙、网关、摄像头、门店网络设备和 HTTP/TCP 服务端点。项目采用 FastAPI、SQLite、异步探测引擎和单页大屏控制台实现，重点关注部署简单、状态直观、告警可追踪、误操作可审计可恢复。
 
+## 快速开始
+
+前提是 Docker Compose 已安装，并确认 Docker 数据目录和本项目所在磁盘有足够空间。在项目根目录创建 `.env`，填写强密码和随机密钥：
+
+```dotenv
+ADMIN_USER=admin
+ADMIN_PASS=replace-with-a-long-unique-password
+APP_SECRET=replace-with-at-least-32-random-characters
+FEISHU_WEBHOOK=
+```
+
+执行 `docker compose up -d --build`，访问 `http://127.0.0.1:8000`，并用 `.env` 中的账户登录。运行 `curl -f http://127.0.0.1:8000/health/ready` 检查就绪。生产环境通过 HTTPS 反向代理访问，且只能运行一个 worker。首次启动与升级会在项目的 `data/` 下存储数据库和备份。
+
+## 架构概览
+
+```mermaid
+flowchart LR
+    Browser[Vue 控制台] --> API[FastAPI]
+    API --> SQLite[(SQLite WAL)]
+    Monitor[异步探测循环] --> State[状态机]
+    State --> SQLite
+    SQLite --> Outbox[告警队列]
+    Outbox --> Channels[通知渠道]
+    Scheduler[定时任务] --> SQLite
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> 待确认
+    待确认 --> 在线: 首次成功
+    待确认 --> 离线: 连续失败达阈值
+    在线 --> 离线: 连续失败达阈值
+    离线 --> 在线: 连续成功达阈值
+```
+
+详见 [架构与数据流](docs/architecture.md)、[运维与容量规划](docs/operations.md)、[HTTP API](docs/api.md)、[界面验收](docs/qa/p4-ui-accessibility.md)。
+
 ## 功能总览
 
 ### 监控看板
@@ -26,11 +63,13 @@ NetSentinel Pro 是一套面向内网资产的轻量级 NOC 监控系统，适�
 
 ### 状态判定
 
-系统将设备状态明确划分为三类：
+后端持久化在线、离线或尚无已确认状态；前端结合失败次数与控制状态，展示以下信息：
 
 - 在线：最近一次已被系统确认探测成功。
 - 离线：连续探测失败次数达到掉线阈值后确认离线。
-- 未知：系统尚未获得足够证据确认在线或离线，例如刚添加尚未完成首次探测，或失败次数尚未达到离线阈值。
+- 待确认：新设备尚未完成首轮探测。
+- 疑似异常：已出现失败，但未达到掉线阈值，显示当前连续失败次数。
+- 维护中、已暂停、已停止：分别表示通知静默、暂不探测、停止监控但保留卡片。
 
 探测方式说明：
 
@@ -354,6 +393,18 @@ docker run --rm --platform linux/amd64 netsentinel-pro:self-check python scripts
 - 将 `data/monitor.db` 和 `data/audit/` 纳入备份策略。
 - 在反向代理层启用 HTTPS、访问控制和日志审计。
 - 定期运行自检脚本验证升级后的关键链路。
+
+## 升级、备份与排障
+
+升级前另存 `data/` 和 `APP_SECRET`，确认数据盘空间；新版本启动时先对需要迁移的旧库创建 `data/backups/monitor-pre-upgrade-*.db`，再执行 Alembic 迁移。升级后检查 `/health/ready`、设备状态及渠道测试发送。失败时停止服务，从升级前备份恢复 `data/monitor.db` 并启动旧版代码。完整步骤见 [运维手册](docs/operations.md#备份升级与回滚)。下载在线备份和上传恢复的接口及限制见 [API 文档](docs/api.md#备份恢复backup)。
+
+常见问题：
+
+- **设备显示“待确认”或长期“未知”**：检查设备是否启用、最近探测时间与失败原因、ICMP 权限、TCP/HTTP 目标可达性；再查 `/health/ready`、数据库权限和迁移版本。旧版本的历史事件被清理后可能丢失当前状态，新版已把状态存入设备记录。
+- **状态显示“疑似异常”**：查看连续失败次数与掉线阈值，必要时在设备详情中立即探测；达到阈值后才确认为离线。
+- **服务就绪检查 503**：按响应 `detail` 排查后台任务、探测心跳和 SQLite 连接；不要只依赖 `/health` 的进程存活结果。
+- **通知未送达**：检查维护/静默设置、分组渠道路由、投递记录、Webhook 目的地限制和 SMTP 配置。
+- **数据库增长过快**：按 `设备数 × 86400 ÷ 探测周期` 估算每日指标行数，实测主库与 WAL 增量，再调整设备级周期和保留天数。不要在服务运行时直接删除 WAL 文件。
 
 ## License
 

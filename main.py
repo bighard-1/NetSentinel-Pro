@@ -162,9 +162,22 @@ async def lifespan(app: FastAPI):
 
 
 ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() == "true"
+OPENAPI_TAGS = [
+    {"name": "Auth", "description": "Login and token revocation"},
+    {"name": "System", "description": "Health and security status"},
+    {"name": "Dashboard", "description": "Network overview and risk ranking"},
+    {"name": "Monitor", "description": "Manual probe scheduling"},
+    {"name": "Devices", "description": "Targets, imports, maintenance, and recovery"},
+    {"name": "Events", "description": "Alert history, logs, and audit timeline"},
+    {"name": "Groups", "description": "Group names and alert policies"},
+    {"name": "Notifications", "description": "Channels, routing, and delivery results"},
+    {"name": "Settings", "description": "Global monitoring and report settings"},
+    {"name": "Backup", "description": "SQLite backup download and restore"},
+]
 app = FastAPI(
     title="NetSentinel Pro",
     version=__version__,
+    openapi_tags=OPENAPI_TAGS,
     lifespan=lifespan,
     docs_url="/docs" if ENABLE_DOCS else None,
     redoc_url="/redoc" if ENABLE_DOCS else None,
