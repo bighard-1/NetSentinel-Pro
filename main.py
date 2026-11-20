@@ -40,7 +40,13 @@ from engine import close_http_client, monitor_health, monitor_loop, shutdown_mon
 from logging_service import configure_logging, log_event, logger
 from services.api_audit import audit_write, safe_summary
 from services.report_scheduler import load_weekly_report_config, schedule_weekly_report_job
-from services.migrations import backup_before_upgrade, upgrade_schema
+from services.migrations import (
+    backup_before_upgrade,
+    migration_status,
+    upgrade_schema,
+    validate_release_version,
+    verify_and_record_upgrade,
+)
 from services.config import load_config
 from services.retention import cleanup_history
 from services.schema import ensure_default_setting
@@ -149,10 +155,12 @@ async def lifespan(app: FastAPI):
     logger.info("Effective configuration: %s", config.safe_summary())
     if weak_admin_password():
         logger.warning("Administrator password is weak; change ADMIN_PASS")
+    validate_release_version()
     backup_path = backup_before_upgrade()
     Base.metadata.create_all(bind=engine)
     upgrade_schema()
     ensure_default_setting()
+    verify_and_record_upgrade()
     if backup_path is not None:
         log_event(category="backup", message=f"升级前数据库备份已创建: {backup_path}")
     log_event(category="system", message="NetSentinel 服务启动")
@@ -420,3 +428,15 @@ def logout(request: Request) -> dict[str, str]:
 @app.get("/api/v1/security-status", tags=["System"])
 def security_status() -> dict[str, bool]:
     return {"weak_admin_password": weak_admin_password()}
+
+
+@app.get("/api/version", tags=["System"], include_in_schema=False)
+@app.get("/api/v1/version", tags=["System"])
+def version_status() -> dict[str, str]:
+    current, head = migration_status()
+    return {
+        "version": __version__,
+        "migration_revision": current or "unversioned",
+        "migration_head": head,
+        "migration_status": "current" if current == head else "outdated",
+    }

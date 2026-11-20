@@ -7,6 +7,8 @@ import main
 from database import SessionLocal
 from models import SystemLog
 from services.config import load_config
+from services.migrations import VERSION_MARKER, backup_before_upgrade, migration_status
+from version import __version__
 
 
 def api_contract() -> None:
@@ -14,10 +16,16 @@ def api_contract() -> None:
         schema = main.app.openapi()
         assert "/api/v1/devices" in schema["paths"]
         assert "/api/devices" not in schema["paths"]
+        assert client.get("/api/version").status_code == 401
 
         login = client.post("/api/v1/auth/login", json={"username": "p5-test", "password": "p5-test-pass"})
         assert login.status_code == 200, login.text
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        version = client.get("/api/v1/version", headers=headers)
+        assert version.status_code == 200 and version.json()["version"] == __version__
+        assert version.json()["migration_status"] == "current"
+        assert version.json()["migration_revision"] == version.json()["migration_head"]
+        assert client.get("/api/version", headers=headers).json() == version.json()
         assert (
             client.get("/api/devices", headers=headers).json() == client.get("/api/v1/devices", headers=headers).json()
         )
@@ -79,6 +87,13 @@ def api_contract() -> None:
         assert int(limited.headers["Retry-After"]) > 0
         settings.api_rate_limit_per_minute = 600
         main._api_requests.clear()
+
+    assert VERSION_MARKER.read_text(encoding="utf-8").strip() == __version__
+    assert migration_status()[0] == migration_status()[1]
+    assert backup_before_upgrade() is None
+    VERSION_MARKER.write_text("0.4.0\n", encoding="utf-8")
+    release_backup = backup_before_upgrade()
+    assert release_backup is not None and release_backup.exists() and release_backup.stat().st_size > 0
 
 
 if __name__ == "__main__":

@@ -20,8 +20,8 @@
 ## 备份、升级与回滚
 
 1. 升级前确认 `data/monitor.db` 所在盘有足够空间，并另存 `data/` 目录及 `APP_SECRET` 到安全位置。不要把明文密钥提交到仓库。
-2. 停止旧服务，部署新代码后启动。若数据库版本落后，启动流程会在 `data/backups/` 生成 `monitor-pre-upgrade-*.db` 并验证完整性，然后执行 Alembic 迁移。
-3. 检查 `/health/ready`、设备状态、通知渠道和 `scripts/self_check.py`。失败时停止新服务，保留现场库，复制最近的 `monitor-pre-upgrade-*.db` 回 `data/monitor.db`，恢复属主与权限，再启动旧代码。
+2. 停止旧服务，部署新代码后启动。应用版本或数据库迁移版本有变化时，启动流程会在 `data/backups/` 生成 `monitor-pre-upgrade-*.db` 并验证完整性，然后执行 Alembic 迁移。`data/.app-version` 记录上次成功启动的应用版本；升级前备份按 `BACKUP_RETENTION_COUNT` 保留最近 N 份。
+3. 检查 `/health/ready`、认证后的 `/api/version`（`migration_status` 应为 `current`）、设备状态、通知渠道和 `scripts/self_check.py`。失败时停止新服务，保留现场库，复制最近的 `monitor-pre-upgrade-*.db` 回 `data/monitor.db`，恢复属主与权限，并恢复旧代码及对应的 `data/.app-version`，再启动旧代码。
 4. 上传数据库恢复前会另建 `monitor-pre-restore-*.db`；自动恢复失败时用此文件按同样方式回滚。恢复文件须是完整的 NetSentinel SQLite 库，且不得超过 `MAX_RESTORE_BYTES`。
 
 复制数据库时先停止服务，避免 WAL 中仍有未检查点的数据。正常下载备份使用 SQLite 在线备份 API，包含已提交的 WAL 数据。恢复演练应在隔离环境进行，并验证设备数、状态与迁移版本。

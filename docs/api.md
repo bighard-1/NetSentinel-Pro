@@ -9,6 +9,7 @@
 | POST | `/api/auth/login` | 用户名和密码换取 Bearer token |
 | POST | `/api/auth/logout` | 吊销当前 token |
 | GET | `/api/security-status` | 弱口令提示状态 |
+| GET | `/api/version` | 应用版本、当前与目标迁移版本、迁移状态；需认证 |
 | GET | `/health` | 进程存活，`{"status":"ok"}` |
 | GET | `/health/ready` | 后台任务、探测心跳和数据库就绪；失败返回 503 |
 
