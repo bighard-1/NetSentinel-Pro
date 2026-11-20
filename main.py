@@ -210,7 +210,7 @@ def index() -> HTMLResponse:
     html = html.replace("<script>", f'<script nonce="{nonce}">').replace("<style>", f'<style nonce="{nonce}">')
     response = HTMLResponse(html)
     response.headers["Content-Security-Policy"] = (
-        f"default-src 'self'; script-src 'self' 'nonce-{nonce}' 'unsafe-eval' https://unpkg.com; "
+        f"default-src 'self'; script-src 'self' 'nonce-{nonce}' 'unsafe-eval'; "
         f"style-src 'self' 'nonce-{nonce}'; style-src-attr 'unsafe-inline'; "
         "connect-src 'self'; img-src 'self' data:; "
         "font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"

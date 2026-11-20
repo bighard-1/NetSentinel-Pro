@@ -62,6 +62,7 @@ def test_dashboard_core_actions() -> None:
                     page = browser.new_page(viewport={"width": 1365, "height": 900})
                     errors: list[str] = []
                     page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.route("https://**/*", lambda route: route.abort())
                     page.goto(base, wait_until="domcontentloaded")
                     page.get_by_placeholder("管理员账号").fill("e2e-admin")
                     page.get_by_placeholder("管理员密码").fill("e2e-strong-password")
