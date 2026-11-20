@@ -28,6 +28,12 @@ class AppSettings(BaseSettings):
     log_max_bytes: int = Field(default=10485760, ge=1024)
     log_backup_count: int = Field(default=5, ge=1, le=100)
     metrics_token: SecretStr = SecretStr("")
+    self_monitor_interval_seconds: int = Field(default=10, ge=1, le=10)
+    database_size_alert_bytes: int = Field(default=5368709120, ge=1024)
+    database_growth_alert_bytes: int = Field(default=1073741824, ge=1024)
+    notification_consecutive_failures: int = Field(default=3, ge=2, le=20)
+    healthcheck_ping_url: SecretStr = SecretStr("")
+    healthcheck_ping_interval_seconds: int = Field(default=60, ge=10)
     max_restore_bytes: int = Field(default=52428800, ge=1024)
     max_bulk_import_bytes: int = Field(default=1048576, ge=1024)
     probe_concurrency: int = Field(default=50, ge=1, le=1000)
@@ -64,6 +70,10 @@ class AppSettings(BaseSettings):
             parsed = urlsplit(self.public_base_url)
             if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
                 raise ValueError("PUBLIC_BASE_URL must be an HTTP(S) URL without embedded credentials")
+        if self.healthcheck_ping_url.get_secret_value():
+            parsed = urlsplit(self.healthcheck_ping_url.get_secret_value())
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError("HEALTHCHECK_PING_URL must be an HTTPS URL without embedded credentials")
         return self
 
     def safe_summary(self) -> dict[str, str | int | bool]:

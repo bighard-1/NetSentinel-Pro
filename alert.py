@@ -359,6 +359,42 @@ async def _send_channel_payload(
     return result.success
 
 
+async def send_system_alert(title: str, message: str) -> bool:
+    """Notify every enabled channel about a service fault, regardless of group routing."""
+    with SessionLocal() as session:
+        channels = (
+            session.execute(
+                select(NotificationChannel)
+                .where(NotificationChannel.enabled.is_(True))
+                .order_by(NotificationChannel.id)
+            )
+            .scalars()
+            .all()
+        )
+        for channel in channels:
+            session.expunge(channel)
+            channel.endpoint = decrypt_secret(channel.endpoint)
+            channel.extra_config = decrypt_secret(channel.extra_config)
+    if channels:
+        results = await asyncio.gather(
+            *(
+                _send_channel_payload(
+                    channel,
+                    title=title,
+                    markdown=message,
+                    raw={"kind": "SELF_MONITOR", "title": title, "message": message},
+                    event_kind="SELF_MONITOR",
+                    group_name="system",
+                )
+                for channel in channels
+            )
+        )
+        return any(results)
+    return await send_feishu_payload(
+        {"msg_type": "text", "content": {"text": f"{title}\n{message}"}}, bypass_silence=True
+    )
+
+
 async def send_test_notification(channel_id: int) -> bool:
     with SessionLocal() as session:
         channel = session.get(NotificationChannel, channel_id)

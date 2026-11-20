@@ -49,6 +49,7 @@ from services.migrations import (
     verify_and_record_upgrade,
 )
 from services.metrics import render_metrics
+from services.self_monitor import SelfMonitor
 from services.config import load_config
 from services.retention import cleanup_history
 from services.schema import ensure_default_setting
@@ -186,6 +187,17 @@ async def lifespan(app: FastAPI):
         cleanup_history,
         trigger=CronTrigger(hour=2, minute=30, timezone="UTC"),
         id="daily_retention_cleanup",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    app.state.self_monitor = SelfMonitor()
+    app.state.scheduler.add_job(
+        app.state.self_monitor.check,
+        "interval",
+        seconds=config.self_monitor_interval_seconds,
+        args=[app],
+        id="self_monitor",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
