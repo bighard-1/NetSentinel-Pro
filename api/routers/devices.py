@@ -9,7 +9,6 @@ from sqlalchemy import delete, desc, func, select
 
 from api.dependencies import current_admin_subject, verify_admin_token
 from database import DB_DIR, SessionLocal
-from engine import forget_device_state
 from logging_service import log_event
 from models import AlertLog, Device, EventType, MonitoringState, ProbeMetric, ProbeType, SystemLog
 from services.device_status import (
@@ -778,6 +777,10 @@ def update_devices_bulk(payload: DeviceBulkUpdate, operator: str = Depends(curre
             if payload.monitoring_state is not None:
                 device.monitoring_state = payload.monitoring_state
                 device.is_monitoring = payload.monitoring_state == MonitoringState.ACTIVE
+                device.success_streak = 0
+                device.failure_streak = 0
+                if payload.monitoring_state == MonitoringState.ACTIVE:
+                    device.last_checked_at = None
             if payload.group_name is not None:
                 device.group_name = payload.group_name.strip() or "default"
             if "probe_interval_seconds" in payload.model_fields_set:
@@ -826,9 +829,6 @@ def delete_devices_bulk(
             session.execute(delete(ProbeMetric).where(ProbeMetric.device_id.in_([device.id for device in devices])))
         session.commit()
 
-    for device in devices:
-        forget_device_state(device.id)
-
     deleted = len(devices)
     skipped = len(unique_ids) - deleted
     details = (
@@ -857,6 +857,13 @@ def update_device(device_id: int, payload: DeviceUpdate, operator: str = Depends
         previous_state = device.monitoring_state
         previous_name = device.name
         previous_ip = device.ip_address
+        previous_target = (
+            device.ip_address,
+            device.probe_type,
+            device.probe_port,
+            device.probe_path,
+            device.expected_status,
+        )
 
         if payload.ip_address is not None and payload.ip_address != device.ip_address:
             exists = session.execute(
@@ -898,6 +905,27 @@ def update_device(device_id: int, payload: DeviceUpdate, operator: str = Depends
         device.probe_port = probe_port
         device.probe_path = (probe_path or "").strip()
         device.expected_status = expected_status
+
+        current_target = (
+            device.ip_address,
+            device.probe_type,
+            device.probe_port,
+            device.probe_path,
+            device.expected_status,
+        )
+        if current_target != previous_target:
+            device.current_status = None
+            device.status_since = None
+            device.last_checked_at = None
+            device.last_success_at = None
+            device.success_streak = 0
+            device.failure_streak = 0
+            device.last_error = ""
+        elif device.monitoring_state != previous_state:
+            device.success_streak = 0
+            device.failure_streak = 0
+            if device.monitoring_state == MonitoringState.ACTIVE:
+                device.last_checked_at = None
 
         session.commit()
         session.refresh(device)
@@ -942,8 +970,6 @@ def delete_device(device_id: int, operator: str = Depends(current_admin_subject)
         session.delete(device)
         session.execute(delete(ProbeMetric).where(ProbeMetric.device_id == device_id))
         session.commit()
-
-    forget_device_state(device_id)
 
     log_event(
         category="asset",

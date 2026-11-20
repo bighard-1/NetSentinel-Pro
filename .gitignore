@@ -1,8 +1,11 @@
 ﻿__pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+.test-p0-*/
 .env
 data/*.db
 data/*.tmp
+data/backups/*.db
 data/audit/*.csv
 .DS_Store

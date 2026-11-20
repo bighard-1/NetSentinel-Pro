@@ -64,7 +64,8 @@ NetSentinel Pro 是一套面向内网资产的轻量级 NOC 监控系统，适�
 - SQLite 单文件存储，适合轻量部署和快速迁移。
 - 支持数据库备份下载和恢复上传，恢复前执行完整性与大小检查。
 - 支持设备清单 CSV 导出。
-- 每周报告任务会生成稳定性摘要并清理过期告警记录，支持在控制台自定义推送星期、时间、时区和启停状态。
+- 每周报告任务会生成稳定性摘要，支持在控制台自定义推送星期、时间、时区和启停状态。历史数据每日独立清理，停用周报不影响清理。
+- 当前状态、连续成功或失败次数持久化到设备记录，重启或清理历史事件后仍能正确判定状态。
 - 提供 `scripts/self_check.py` 自检脚本，覆盖核心 API、探测、告警、通知、审计、恢复链路。
 
 ## 技术栈
@@ -108,6 +109,10 @@ ADMIN_TOKEN_TTL_SECONDS=43200
 LOGIN_WINDOW_SECONDS=300
 LOGIN_MAX_FAILURES=5
 MAX_RESTORE_BYTES=52428800
+ALERT_RETENTION_DAYS=90
+PROBE_METRIC_RETENTION_DAYS=14
+SYSTEM_LOG_RETENTION_DAYS=30
+NOTIFICATION_DELIVERY_RETENTION_DAYS=30
 ```
 
 邮件通知配置：
@@ -149,7 +154,10 @@ http://localhost:8000
 ```text
 data/monitor.db
 data/audit/
+data/backups/
 ```
+
+启动时会检查数据库迁移版本。需要升级旧库时，系统先在 `data/backups/` 创建通过完整性检查的在线备份，然后应用 Alembic 迁移。若迁移失败，应停止服务、保留原库与升级前备份，再从备份恢复。`GET /health/ready` 会检查后台任务、监控心跳与数据库连接；容器健康检查使用此接口。
 
 ## 构建 x86 Docker 镜像
 

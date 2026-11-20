@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from database import SessionLocal
-from models import AlertLog, Device, MonitoringState, ProbeMetric, SystemSetting
+from models import Device, MonitoringState, SystemSetting
 
 DEFAULT_PROBE_INTERVAL_SECONDS = 30
 
@@ -30,6 +30,10 @@ class DeviceOut(BaseModel):
     latest_probe_time: datetime | None
     next_probe_due_at: datetime | None
     probe_interval_seconds: int
+    last_success_at: datetime | None = None
+    last_error: str = ""
+    success_streak: int = 0
+    failure_streak: int = 0
 
 
 def is_in_maintenance(device: Device, now: datetime | None = None) -> bool:
@@ -76,12 +80,13 @@ def as_device_out(
     probe_map: dict[int, datetime | None] | None = None,
     default_probe_interval_seconds: int = DEFAULT_PROBE_INTERVAL_SECONDS,
 ) -> DeviceOut:
-    latest_status, latest_event_time = latest_map.get(device.id, ("UNKNOWN", None))
+    latest_status = device.current_status.value if device.current_status else "UNKNOWN"
+    latest_event_time = device.status_since
     in_maintenance = is_in_maintenance(device)
     monitoring_state = device.monitoring_state.value if device.monitoring_state else (
         MonitoringState.ACTIVE.value if device.is_monitoring else MonitoringState.PAUSED.value
     )
-    latest_probe_time = (probe_map or {}).get(device.id)
+    latest_probe_time = device.last_checked_at
     probe_interval_seconds = max(
         1,
         int(device.probe_interval_seconds or default_probe_interval_seconds or DEFAULT_PROBE_INTERVAL_SECONDS),
@@ -115,6 +120,10 @@ def as_device_out(
         latest_probe_time=latest_probe_time,
         next_probe_due_at=next_probe_due_at,
         probe_interval_seconds=probe_interval_seconds,
+        last_success_at=device.last_success_at,
+        last_error=device.last_error or "",
+        success_streak=device.success_streak or 0,
+        failure_streak=device.failure_streak or 0,
     )
 
 
@@ -124,19 +133,10 @@ def load_latest_status_map(device_ids: list[int]) -> dict[int, tuple[str, dateti
 
     with SessionLocal() as session:
         rows = session.execute(
-            select(AlertLog.device_id, AlertLog.event_type, AlertLog.event_time)
-            .where(AlertLog.device_id.in_(device_ids))
-            .order_by(AlertLog.device_id.asc(), AlertLog.id.desc())
+            select(Device.id, Device.current_status, Device.status_since)
+            .where(Device.id.in_(device_ids), Device.current_status.is_not(None))
         )
-
-        latest_map: dict[int, tuple[str, datetime | None]] = {}
-        seen: set[int] = set()
-        for device_id, event_type, event_time in rows:
-            if device_id in seen:
-                continue
-            seen.add(device_id)
-            latest_map[device_id] = (event_type.value, event_time)
-        return latest_map
+        return {device_id: (status.value, since) for device_id, status, since in rows}
 
 
 def load_latest_probe_map(device_ids: list[int]) -> dict[int, datetime | None]:
@@ -145,19 +145,10 @@ def load_latest_probe_map(device_ids: list[int]) -> dict[int, datetime | None]:
 
     with SessionLocal() as session:
         rows = session.execute(
-            select(ProbeMetric.device_id, ProbeMetric.checked_at)
-            .where(ProbeMetric.device_id.in_(device_ids))
-            .order_by(ProbeMetric.device_id.asc(), ProbeMetric.id.desc())
+            select(Device.id, Device.last_checked_at)
+            .where(Device.id.in_(device_ids), Device.last_checked_at.is_not(None))
         )
-
-        latest_map: dict[int, datetime | None] = {}
-        seen: set[int] = set()
-        for device_id, checked_at in rows:
-            if device_id in seen:
-                continue
-            seen.add(device_id)
-            latest_map[device_id] = checked_at
-        return latest_map
+        return {device_id: checked_at for device_id, checked_at in rows}
 
 
 def load_probe_interval_seconds() -> int:
@@ -172,11 +163,8 @@ def load_current_device_statuses() -> list[DeviceOut]:
     with SessionLocal() as session:
         devices = session.execute(select(Device).order_by(Device.id.asc())).scalars().all()
 
-    device_ids = [device.id for device in devices]
-    latest_map = load_latest_status_map(device_ids)
-    probe_map = load_latest_probe_map(device_ids)
     probe_interval_seconds = load_probe_interval_seconds()
-    return [as_device_out(device, latest_map, probe_map, probe_interval_seconds) for device in devices]
+    return [as_device_out(device, {}, {}, probe_interval_seconds) for device in devices]
 
 
 def device_uptime_percent_7d(offline_seconds: int) -> float:

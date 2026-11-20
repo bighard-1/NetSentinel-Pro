@@ -2,9 +2,11 @@ import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,9 +22,11 @@ from api.routers.notifications import router as notifications_router
 from api.routers.settings import router as settings_router
 from auth import create_admin_token, is_admin_configured, verify_admin_credentials
 from database import Base, engine
-from engine import monitor_loop, shutdown_monitor_task
+from engine import monitor_health, monitor_loop, shutdown_monitor_task
 from logging_service import configure_logging, log_event
 from services.report_scheduler import schedule_weekly_report_job
+from services.migrations import backup_before_upgrade, upgrade_schema
+from services.retention import cleanup_history
 from services.schema import ensure_default_setting, ensure_schema_columns
 import models  # noqa: F401 - Ensure model metadata is registered
 
@@ -71,9 +75,13 @@ def _clear_login_failures(key: str) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
+    backup_path = backup_before_upgrade()
     Base.metadata.create_all(bind=engine)
     ensure_schema_columns()
+    upgrade_schema()
     ensure_default_setting()
+    if backup_path is not None:
+        log_event(category="backup", message=f"升级前数据库备份已创建: {backup_path}")
     log_event(category="system", message="NetSentinel 服务启动")
 
     app.state.monitor_stop_event = asyncio.Event()
@@ -90,6 +98,14 @@ async def lifespan(app: FastAPI):
 
     app.state.scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
     schedule_weekly_report_job(app.state.scheduler)
+    app.state.scheduler.add_job(
+        cleanup_history,
+        trigger=CronTrigger(hour=2, minute=30, timezone="UTC"),
+        id="daily_retention_cleanup",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     app.state.scheduler.start()
 
     yield
@@ -131,6 +147,33 @@ def index() -> FileResponse:
 @app.get("/health", tags=["System"])
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/health/ready", tags=["System"])
+def readiness_check(request: Request) -> dict[str, str | int | float]:
+    monitor_task = getattr(request.app.state, "monitor_task", None)
+    alert_task = getattr(request.app.state, "alert_task", None)
+    if monitor_task is None or monitor_task.done() or alert_task is None or alert_task.done():
+        raise HTTPException(status_code=503, detail="后台监控或告警任务未运行")
+    if monitor_health.last_error:
+        raise HTTPException(status_code=503, detail="最近一轮探测失败")
+    last_progress = monitor_health.completed_at or monitor_health.started_at
+    if last_progress is None:
+        raise HTTPException(status_code=503, detail="探测引擎尚未启动")
+    stale_after = 3 * max(1, monitor_health.expected_interval_seconds)
+    if (datetime.now(timezone.utc) - last_progress).total_seconds() > stale_after:
+        raise HTTPException(status_code=503, detail="探测引擎心跳已过期")
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("SELECT 1")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="数据库不可用") from exc
+    return {
+        "status": "ready",
+        "probed_devices": monitor_health.probed_devices,
+        "failed_probes": monitor_health.failed_probes,
+        "round_duration_seconds": round(monitor_health.round_duration_seconds, 3),
+    }
 
 
 @app.post("/api/auth/login", response_model=LoginOut, tags=["Auth"])

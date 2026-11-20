@@ -14,4 +14,10 @@ services:
       ADMIN_PASS: ${ADMIN_PASS}
       APP_SECRET: ${APP_SECRET:-}
       FEISHU_WEBHOOK: ${FEISHU_WEBHOOK}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped

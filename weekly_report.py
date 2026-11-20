@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 
 from alert import send_feishu_payload
 from database import SessionLocal
 from logging_service import log_event
 from models import AlertLog, Device, EventType, SystemSetting
+from services.retention import cleanup_history
 
 DEFAULT_REPORT_TIMEZONE = "Asia/Shanghai"
 
@@ -110,8 +111,4 @@ async def run_weekly_report_and_cleanup() -> None:
         level="INFO" if sent else "WARNING",
     )
 
-    cutoff = now - timedelta(days=30)
-    with SessionLocal() as session:
-        result = session.execute(delete(AlertLog).where(AlertLog.event_time < cutoff))
-        session.commit()
-    log_event(category="report", message=f"已清理 30 天前告警记录 {result.rowcount or 0} 条")
+    await cleanup_history()

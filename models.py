@@ -48,6 +48,13 @@ class Device(Base):
     probe_path: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     expected_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     probe_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    current_status: Mapped[EventType | None] = mapped_column(Enum(EventType), nullable=True)
+    status_since: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_checked_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    success_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failure_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
 
     alert_logs: Mapped[list["AlertLog"]] = relationship(
         "AlertLog",
