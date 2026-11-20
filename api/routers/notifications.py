@@ -19,7 +19,7 @@ from services.secrets import apply_secret_update, encrypt_secret, mask_secret, M
 from services.webhook_security import validate_webhook_url
 from services.redaction import redact_text
 
-router = APIRouter(prefix="/api", tags=["Notifications"])
+router = APIRouter(tags=["Notifications"])
 
 
 class NotificationChannelOut(BaseModel):
@@ -212,9 +212,10 @@ def list_notification_deliveries(
     channel_id: int | None = Query(default=None, ge=1),
     status: str | None = Query(default=None, pattern="^(SUCCESS|FAILED)$"),
     limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ) -> list[NotificationDeliveryOut]:
     with SessionLocal() as session:
-        stmt = select(NotificationDelivery).order_by(desc(NotificationDelivery.id)).limit(limit)
+        stmt = select(NotificationDelivery).order_by(desc(NotificationDelivery.id)).limit(limit).offset(offset)
         if channel_id is not None:
             stmt = stmt.where(NotificationDelivery.channel_id == channel_id)
         if status:

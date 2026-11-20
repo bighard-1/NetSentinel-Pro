@@ -21,7 +21,7 @@ from services.config import load_config
 from services.migrations import create_database_backup, upgrade_schema
 from services.schema import ensure_default_setting
 
-router = APIRouter(prefix="/api", tags=["Backup"])
+router = APIRouter(tags=["Backup"])
 
 DB_FILE = DB_DIR / "monitor.db"
 

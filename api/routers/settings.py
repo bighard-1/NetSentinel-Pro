@@ -13,7 +13,7 @@ from services.report_scheduler import schedule_weekly_report_job
 from services.secrets import apply_secret_update, mask_secret, MASK
 from services.webhook_security import validate_webhook_url
 
-router = APIRouter(prefix="/api", tags=["Settings"])
+router = APIRouter(tags=["Settings"])
 VALID_WEEKDAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 
 

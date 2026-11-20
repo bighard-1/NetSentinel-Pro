@@ -24,7 +24,7 @@ def auth_coverage() -> None:
         for route in app.routes:
             if not isinstance(route, APIRoute) or not route.path.startswith("/api/"):
                 continue
-            if route.path == "/api/auth/login":
+            if route.path in {"/api/auth/login", "/api/v1/auth/login"}:
                 continue
             path = re.sub(r"\{[^}]+\}", "1", route.path)
             for method in route.methods & {"GET", "POST", "PUT", "PATCH", "DELETE"}:

@@ -1,6 +1,6 @@
 # HTTP API
 
-当前 API 路径以 `/api` 开头；`/health` 与 `/health/ready` 为公开探针。除 `POST /api/auth/login` 外，API 请求须带 `Authorization: Bearer <token>`。可选 viewer 账户只读，写请求返回 403。默认关闭交互式 OpenAPI；在可信开发环境设置 `ENABLE_DOCS=true` 后可访问 `/docs` 和 `/openapi.json`。
+当前正式 API 路径以 `/api/v1` 开头，旧版 `/api` 路径保留为兼容别名；下表中的 `/api/...` 路径均可替换为 `/api/v1/...`。`/health` 与 `/health/ready` 为公开探针。除登录接口外，API 请求须带 `Authorization: Bearer <token>`。可选 viewer 账户只读，写请求返回 403。默认关闭交互式 OpenAPI；在可信开发环境设置 `ENABLE_DOCS=true` 后可访问 `/docs` 和 `/openapi.json`，文档仅列出 `/api/v1` 路径。
 
 ## 认证与系统（Auth / System）
 
@@ -51,7 +51,7 @@ Content-Type: application/json
 {"name":"Core switch","ip_address":"10.0.0.1","group_name":"network","probe_type":"ICMP","probe_interval_seconds":30}
 ```
 
-同一地址可以用不同探测类型、TCP 端口或 HTTP 路径创建多个目标；完全相同的组合会被判为重复。TCP 目标需要 `probe_port`，HTTP 目标可设置 `probe_path` 和 `expected_status`。探测周期最少 5 秒。当前列表接口返回数组，尚未启用统一分页；前端自行分页。
+同一地址可以用不同探测类型、TCP 端口或 HTTP 路径创建多个目标；完全相同的组合会被判为重复。TCP 目标需要 `probe_port`，HTTP 目标可设置 `probe_path` 和 `expected_status`。探测周期最少 5 秒。设备列表可用 `group_name`、`status=ONLINE|OFFLINE|UNKNOWN` 筛选，并用 `limit`（最多 1000）及 `offset` 分页；不传 `limit` 时保留完整数组响应，供旧前端使用。重复批量创建会跳过已有目标，重复批量更新不会重置未变化设备的状态，重复批量删除会返回 `deleted: 0`。
 
 ## 看板、事件与审计（Dashboard / Events）
 
@@ -59,11 +59,11 @@ Content-Type: application/json
 | --- | --- | --- |
 | GET | `/api/summary` | 无 |
 | GET | `/api/risk-devices` | `limit` |
-| GET | `/api/alerts` | `device_id`、`event_type=ONLINE\|OFFLINE`、`limit` |
-| GET | `/api/logs` | `level`、`category`、`q`、`limit` |
-| GET | `/api/audit-timeline` | `q`、`action`、`device_id`、`limit` |
+| GET | `/api/alerts` | `device_id`、`event_type=ONLINE\|OFFLINE`、`limit`、`offset` |
+| GET | `/api/logs` | `level`、`category`、`q`、`limit`、`offset` |
+| GET | `/api/audit-timeline` | `q`、`action`、`device_id`、`limit`、`offset` |
 
-事件、日志与投递列表多数使用 `limit` 而非页码；默认通常为 200、上限 1000，具体端点以 OpenAPI 参数为准。时间为带时区的 UTC ISO 8601 字符串。
+事件、日志、删除快照与投递列表使用 `limit`、`offset`；默认通常为 200、上限 1000，具体端点以 OpenAPI 参数为准。时间为带时区的 UTC ISO 8601 字符串。成功的已认证写请求会追加审计记录，包含操作人、来源 IP、目标路径和操作前后状态摘要；请求正文及明文密钥不写入该记录。
 
 ## 策略、通知与设置（Groups / Notifications / Settings）
 
@@ -93,4 +93,4 @@ Content-Type: application/json
 
 ## 错误响应
 
-当前大多数错误沿用 FastAPI 结构 `{"detail":"说明"}`，请求字段校验失败的 `detail` 为错误数组。常见状态码：400 参数或文件无效、401 未认证或令牌失效、403 viewer 写操作、404 对象不存在、409 状态冲突、411 导入请求缺少 Content-Length、413 文件过大、422 字段校验失败、429 限流、500 恢复失败、503 后台未就绪。统一的 `{code,message,detail}` 格式和 `/api/v1` 别名属于 P5 后续改动。
+API 错误统一返回 `{"code":"VALIDATION_ERROR","message":"请求参数无效","detail":[...]}` 一类结构，`detail` 保留旧版兼容字段，字段校验错误不回显输入内容。常见状态码：400 参数或文件无效、401 未认证或令牌失效、403 viewer 写操作、404 对象不存在、409 状态冲突、411 导入请求缺少 Content-Length、413 文件过大、422 字段校验失败、429 限流、500 恢复失败、503 后台未就绪。已认证 API 默认按令牌和来源 IP 各限制每分钟 600 次，超限返回 `Retry-After`；登录失败有独立限流策略。

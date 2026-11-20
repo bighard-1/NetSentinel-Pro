@@ -8,7 +8,7 @@ from api.dependencies import verify_admin_token
 from database import SessionLocal
 from models import AlertLog, Device, EventType, SystemLog
 
-router = APIRouter(prefix="/api", tags=["Events"])
+router = APIRouter(tags=["Events"])
 
 
 class LogOut(BaseModel):
@@ -95,9 +95,10 @@ def list_logs(
     category: str | None = Query(default=None, max_length=50),
     q: str | None = Query(default=None, max_length=100),
     limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ) -> list[LogOut]:
     with SessionLocal() as session:
-        stmt = select(SystemLog).order_by(desc(SystemLog.id)).limit(limit)
+        stmt = select(SystemLog).order_by(desc(SystemLog.id)).limit(limit).offset(offset)
         if level:
             stmt = stmt.where(SystemLog.level == level.upper())
         if category:
@@ -127,11 +128,12 @@ def list_audit_timeline(
     action: str | None = Query(default=None, max_length=50),
     device_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ) -> list[AuditTimelineOut]:
     keyword = q.strip().lower() if q else ""
     action_filter = action.strip().upper() if action else ""
     with SessionLocal() as session:
-        stmt = select(SystemLog).where(SystemLog.category == "asset").order_by(desc(SystemLog.id)).limit(limit)
+        stmt = select(SystemLog).where(SystemLog.category.in_(["asset", "audit"])).order_by(desc(SystemLog.id))
         if device_id is not None:
             stmt = stmt.where(SystemLog.device_id == device_id)
         rows = session.execute(stmt).scalars().all()
@@ -158,7 +160,7 @@ def list_audit_timeline(
                 details=row.details,
             )
         )
-    return timeline
+    return timeline[offset : offset + limit]
 
 
 @router.get("/alerts", response_model=list[AlertHistoryOut])
@@ -167,6 +169,7 @@ def list_alert_history(
     device_id: int | None = Query(default=None, ge=1),
     event_type: str | None = Query(default=None, pattern="^(ONLINE|OFFLINE)$"),
     limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ) -> list[AlertHistoryOut]:
     with SessionLocal() as session:
         stmt = (
@@ -174,6 +177,7 @@ def list_alert_history(
             .join(Device, Device.id == AlertLog.device_id)
             .order_by(desc(AlertLog.id))
             .limit(limit)
+            .offset(offset)
         )
         if device_id is not None:
             stmt = stmt.where(AlertLog.device_id == device_id)

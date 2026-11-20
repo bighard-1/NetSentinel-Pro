@@ -11,7 +11,7 @@ from logging_service import log_event
 from models import AlertLog, Device, EventType
 from services.device_status import load_current_device_statuses, load_latest_status_map
 
-router = APIRouter(prefix="/api", tags=["Dashboard"])
+router = APIRouter(tags=["Dashboard"])
 
 TRIGGER_MONITOR_MIN_INTERVAL_SECONDS = 5
 

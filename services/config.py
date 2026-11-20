@@ -20,6 +20,8 @@ class AppSettings(BaseSettings):
     login_window_seconds: int = Field(default=300, ge=1)
     login_max_failures: int = Field(default=5, ge=1)
     login_max_buckets: int = Field(default=10000, ge=100)
+    api_rate_limit_per_minute: int = Field(default=600, ge=1)
+    api_rate_limit_buckets: int = Field(default=10000, ge=100)
     max_restore_bytes: int = Field(default=52428800, ge=1024)
     max_bulk_import_bytes: int = Field(default=1048576, ge=1024)
     probe_concurrency: int = Field(default=50, ge=1, le=1000)

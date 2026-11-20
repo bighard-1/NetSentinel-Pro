@@ -25,7 +25,7 @@ from services.device_status import (
 from services.device_targets import existing_target as _existing_target, target_key as _target_key
 from validators import normalize_host_identifier
 
-router = APIRouter(prefix="/api/devices", tags=["Devices"])
+router = APIRouter(prefix="/devices", tags=["Devices"])
 
 
 class DeviceCreate(BaseModel):
@@ -517,8 +517,18 @@ def _deleted_snapshot_summary(log: SystemLog, rows: list[dict]) -> DeletedSnapsh
 
 
 @router.get("", response_model=list[DeviceOut])
-def list_devices() -> list[DeviceOut]:
-    return load_current_device_statuses()
+def list_devices(
+    group_name: str | None = Query(default=None, max_length=100),
+    status: str | None = Query(default=None, pattern="^(ONLINE|OFFLINE|UNKNOWN)$"),
+    limit: int | None = Query(default=None, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> list[DeviceOut]:
+    devices = load_current_device_statuses()
+    if group_name is not None:
+        devices = [device for device in devices if device.group_name == group_name]
+    if status is not None:
+        devices = [device for device in devices if device.latest_status == status]
+    return devices[offset : offset + limit if limit is not None else None]
 
 
 @router.get("/export.csv")
@@ -621,6 +631,7 @@ def list_deleted_snapshots(
     start: datetime | None = None,
     end: datetime | None = None,
     limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ) -> list[DeletedSnapshotSummaryOut]:
     keyword = q.strip().lower() if q else ""
     operator_keyword = operator.strip().lower() if operator else ""
@@ -632,7 +643,6 @@ def list_deleted_snapshots(
                 SystemLog.details.ilike("%CSV_SNAPSHOT_START%"),
             )
             .order_by(desc(SystemLog.id))
-            .limit(limit)
         )
         if start is not None:
             stmt = stmt.where(SystemLog.created_at >= as_aware_utc(start))
@@ -661,7 +671,7 @@ def list_deleted_snapshots(
         if operator_keyword and operator_keyword not in summary.operator.lower():
             continue
         summaries.append(summary)
-    return summaries
+    return summaries[offset : offset + limit]
 
 
 @router.post("/delete-snapshots/{log_id}/restore")
@@ -1139,20 +1149,28 @@ def update_devices_bulk(
     with SessionLocal() as session:
         devices = session.execute(select(Device).where(Device.id.in_(unique_ids))).scalars().all()
         for device in devices:
-            if payload.monitoring_state is not None:
+            changed = False
+            if payload.monitoring_state is not None and device.monitoring_state != payload.monitoring_state:
                 device.monitoring_state = payload.monitoring_state
                 device.is_monitoring = payload.monitoring_state == MonitoringState.ACTIVE
                 device.success_streak = 0
                 device.failure_streak = 0
                 if payload.monitoring_state == MonitoringState.ACTIVE:
                     device.last_checked_at = None
-            if payload.group_name is not None:
+                changed = True
+            if payload.group_name is not None and device.group_name != (payload.group_name.strip() or "default"):
                 device.group_name = payload.group_name.strip() or "default"
-            if "probe_interval_seconds" in payload.model_fields_set:
+                changed = True
+            if (
+                "probe_interval_seconds" in payload.model_fields_set
+                and device.probe_interval_seconds != payload.probe_interval_seconds
+            ):
                 device.probe_interval_seconds = payload.probe_interval_seconds
-            if payload.probe_retry_count is not None:
+                changed = True
+            if payload.probe_retry_count is not None and device.probe_retry_count != payload.probe_retry_count:
                 device.probe_retry_count = payload.probe_retry_count
-            updated += 1
+                changed = True
+            updated += int(changed)
         session.commit()
 
     skipped = len(unique_ids) - updated

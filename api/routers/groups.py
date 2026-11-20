@@ -10,7 +10,7 @@ from services.secrets import apply_secret_update, mask_secret, MASK
 from services.webhook_security import validate_webhook_url
 from datetime import datetime
 
-router = APIRouter(prefix="/api", tags=["Groups"])
+router = APIRouter(tags=["Groups"])
 
 
 class GroupPolicyOut(BaseModel):

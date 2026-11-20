@@ -1,9 +1,11 @@
 import asyncio
+import hashlib
 import ipaddress
 import os
 import secrets
 import time
 from contextlib import asynccontextmanager
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -11,6 +13,8 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -34,6 +38,7 @@ from auth import (
 from database import Base, engine
 from engine import close_http_client, monitor_health, monitor_loop, shutdown_monitor_task, start_http_client
 from logging_service import configure_logging, log_event, logger
+from services.api_audit import audit_write, safe_summary
 from services.report_scheduler import load_weekly_report_config, schedule_weekly_report_job
 from services.migrations import backup_before_upgrade, upgrade_schema
 from services.config import load_config
@@ -45,6 +50,7 @@ import models  # noqa: F401 - Ensure model metadata is registered
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 _login_failures: dict[str, list[float]] = {}
+_api_requests: dict[str, deque[float]] = {}
 
 
 class LoginRequest(BaseModel):
@@ -105,6 +111,32 @@ def _record_login_failure(key: str) -> None:
 
 def _clear_login_failures(key: str) -> None:
     _login_failures.pop(key, None)
+
+
+def _api_retry_after(token: str, request: Request) -> int:
+    """Bound API traffic per token and source IP with bounded process memory."""
+    config = load_config()
+    now = time.monotonic()
+    token_hash = hashlib.sha256(token.encode()).hexdigest()[:24]
+    keys = (f"token:{token_hash}", f"ip:{_client_key(request)}")
+    retry_after = 0
+    for key in keys:
+        bucket = _api_requests.setdefault(key, deque())
+        while bucket and now - bucket[0] >= 60:
+            bucket.popleft()
+        if len(bucket) >= config.api_rate_limit_per_minute:
+            retry_after = max(retry_after, max(1, int(61 - (now - bucket[0]))))
+    if retry_after:
+        return retry_after
+    for key in keys:
+        _api_requests[key].append(now)
+    if len(_api_requests) > config.api_rate_limit_buckets:
+        for key in list(_api_requests):
+            if not _api_requests[key] or now - _api_requests[key][-1] >= 60:
+                del _api_requests[key]
+        while len(_api_requests) > config.api_rate_limit_buckets:
+            _api_requests.pop(next(iter(_api_requests)))
+    return 0
 
 
 @asynccontextmanager
@@ -184,48 +216,109 @@ app = FastAPI(
     openapi_url="/openapi.json" if ENABLE_DOCS else None,
 )
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-app.include_router(backup_router)
-app.include_router(dashboard_router)
-app.include_router(devices_router)
-app.include_router(events_router)
-app.include_router(groups_router)
-app.include_router(notifications_router)
-app.include_router(settings_router)
+API_ROUTERS = (
+    backup_router,
+    dashboard_router,
+    devices_router,
+    events_router,
+    groups_router,
+    notifications_router,
+    settings_router,
+)
+for api_router in API_ROUTERS:
+    app.include_router(api_router, prefix="/api", include_in_schema=False)
+    app.include_router(api_router, prefix="/api/v1")
+
+
+ERROR_CODES = {
+    400: "BAD_REQUEST",
+    401: "UNAUTHORIZED",
+    403: "FORBIDDEN",
+    404: "NOT_FOUND",
+    409: "CONFLICT",
+    411: "LENGTH_REQUIRED",
+    413: "PAYLOAD_TOO_LARGE",
+    422: "VALIDATION_ERROR",
+    429: "RATE_LIMITED",
+    500: "INTERNAL_ERROR",
+    503: "SERVICE_UNAVAILABLE",
+}
+
+
+def _api_error(status_code: int, detail: str | list | dict, *, headers: dict[str, str] | None = None) -> JSONResponse:
+    message = detail if isinstance(detail, str) else "请求参数无效" if status_code == 422 else "请求失败"
+    return JSONResponse(
+        status_code=status_code,
+        content={"code": ERROR_CODES.get(status_code, f"HTTP_{status_code}"), "message": message, "detail": detail},
+        headers={"Cache-Control": "no-store", **(headers or {})},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def api_http_exception(request: Request, exc: HTTPException) -> Response:
+    if request.url.path.startswith("/api/"):
+        return _api_error(exc.status_code, exc.detail, headers=dict(exc.headers or {}))
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def api_validation_exception(request: Request, exc: RequestValidationError) -> Response:
+    if request.url.path.startswith("/api/"):
+        detail = [{"loc": list(item["loc"]), "msg": item["msg"], "type": item["type"]} for item in exc.errors()]
+        return _api_error(422, detail)
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/api/") and path != "/api/auth/login":
+    payload = None
+    if path.startswith("/api/") and path not in {"/api/auth/login", "/api/v1/auth/login"}:
         authorization = request.headers.get("authorization", "")
         token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else ""
         payload = verify_admin_token_value(token) if token else None
         if payload is None:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Missing or invalid bearer token"},
-                headers={"Cache-Control": "no-store"},
-            )
+            return _api_error(401, "Missing or invalid bearer token")
+        retry_after = _api_retry_after(token, request)
+        if retry_after:
+            return _api_error(429, "API rate limit exceeded", headers={"Retry-After": str(retry_after)})
         if (
             payload["scope"] == "viewer"
             and request.method not in {"GET", "HEAD", "OPTIONS"}
-            and path != "/api/auth/logout"
+            and path not in {"/api/auth/logout", "/api/v1/auth/logout"}
         ):
-            return JSONResponse(
-                status_code=403,
-                content={"detail": "Viewer account is read only"},
-                headers={"Cache-Control": "no-store"},
-            )
-    if path in {"/api/devices/bulk", "/api/devices/bulk-preview"} and request.method == "POST":
+            return _api_error(403, "Viewer account is read only")
+    if (
+        path
+        in {"/api/devices/bulk", "/api/devices/bulk-preview", "/api/v1/devices/bulk", "/api/v1/devices/bulk-preview"}
+        and request.method == "POST"
+    ):
         if "content-length" not in request.headers:
-            return JSONResponse(status_code=411, content={"detail": "Content-Length is required"})
+            return _api_error(411, "Content-Length is required")
         try:
             length = int(request.headers["content-length"])
         except ValueError:
-            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+            return _api_error(400, "Invalid Content-Length")
         if length > load_config().max_bulk_import_bytes:
-            return JSONResponse(status_code=413, content={"detail": "Bulk import is too large"})
+            return _api_error(413, "Bulk import is too large")
+    audit_request = (
+        payload is not None
+        and request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and path not in {"/api/devices/bulk-preview", "/api/v1/devices/bulk-preview"}
+    )
+    before = await asyncio.to_thread(safe_summary, path) if audit_request else ""
     response: Response = await call_next(request)
+    if audit_request and 200 <= response.status_code < 300:
+        after = await asyncio.to_thread(safe_summary, path)
+        await asyncio.to_thread(
+            audit_write,
+            path=path,
+            method=request.method,
+            operator=str(payload.get("sub", "unknown")),
+            source_ip=_client_key(request),
+            before=before,
+            after=after,
+        )
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -284,7 +377,8 @@ def readiness_check(request: Request) -> dict[str, str | int | float]:
     }
 
 
-@app.post("/api/auth/login", response_model=LoginOut, tags=["Auth"])
+@app.post("/api/auth/login", response_model=LoginOut, tags=["Auth"], include_in_schema=False)
+@app.post("/api/v1/auth/login", response_model=LoginOut, tags=["Auth"])
 def login(payload: LoginRequest, request: Request) -> LoginOut:
     if not is_admin_configured():
         raise HTTPException(status_code=500, detail="ADMIN_USER/ADMIN_PASS not configured")
@@ -312,7 +406,8 @@ def login(payload: LoginRequest, request: Request) -> LoginOut:
     return LoginOut(access_token=create_admin_token(payload.username, role), role=role)
 
 
-@app.post("/api/auth/logout", tags=["Auth"])
+@app.post("/api/auth/logout", tags=["Auth"], include_in_schema=False)
+@app.post("/api/v1/auth/logout", tags=["Auth"])
 def logout(request: Request) -> dict[str, str]:
     token = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
     if not revoke_token_value(token):
@@ -321,6 +416,7 @@ def logout(request: Request) -> dict[str, str]:
     return {"status": "success"}
 
 
-@app.get("/api/security-status", tags=["System"])
+@app.get("/api/security-status", tags=["System"], include_in_schema=False)
+@app.get("/api/v1/security-status", tags=["System"])
 def security_status() -> dict[str, bool]:
     return {"weak_admin_password": weak_admin_password()}
