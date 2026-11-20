@@ -63,9 +63,7 @@ def run(scenario: str) -> None:
 
         with SessionLocal() as session:
             if scenario == "retention":
-                session.execute(
-                    update(AlertLog).values(event_time=datetime.now(timezone.utc) - timedelta(days=100))
-                )
+                session.execute(update(AlertLog).values(event_time=datetime.now(timezone.utc) - timedelta(days=100)))
             elif scenario == "missing_history":
                 session.execute(delete(AlertLog))
             else:
@@ -140,8 +138,7 @@ def run_monitor_recovery() -> None:
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "p0-test", "password": "p0-test-pass"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        created = client.post("/api/devices", headers=headers,
-            json={"name": "Recovery", "ip_address": "127.0.0.1"})
+        created = client.post("/api/devices", headers=headers, json={"name": "Recovery", "ip_address": "127.0.0.1"})
         assert created.status_code == 200, created.text
         assert client.post("/api/trigger-monitor", headers=headers).status_code == 200
         deadline = time.monotonic() + 3
@@ -163,8 +160,7 @@ def run_restart_streak() -> None:
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "p0-test", "password": "p0-test-pass"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        created = client.post("/api/devices", headers=headers,
-            json={"name": "Restart", "ip_address": "127.0.0.1"})
+        created = client.post("/api/devices", headers=headers, json={"name": "Restart", "ip_address": "127.0.0.1"})
         assert created.status_code == 200, created.text
         assert client.post("/api/trigger-monitor", headers=headers).status_code == 200
         wait_for_probe(client, 1)
@@ -197,14 +193,12 @@ def run_recreate_same_ip() -> None:
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "p0-test", "password": "p0-test-pass"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        first = client.post("/api/devices", headers=headers,
-            json={"name": "First", "ip_address": "127.0.0.1"})
+        first = client.post("/api/devices", headers=headers, json={"name": "First", "ip_address": "127.0.0.1"})
         assert first.status_code == 200, first.text
         assert client.post("/api/trigger-monitor", headers=headers).status_code == 200
         wait_for_probe(client, 1)
         assert client.delete(f"/api/devices/{first.json()['id']}", headers=headers).status_code == 200
-        second = client.post("/api/devices", headers=headers,
-            json={"name": "Second", "ip_address": "127.0.0.1"})
+        second = client.post("/api/devices", headers=headers, json={"name": "Second", "ip_address": "127.0.0.1"})
         assert second.status_code == 200, second.text
         client.app.state.last_manual_trigger_ts = 0.0
         assert client.post("/api/trigger-monitor", headers=headers).status_code == 200

@@ -19,6 +19,10 @@ Set `ADMIN_USER`, `ADMIN_PASS`, and `APP_SECRET` in your local environment. Keep
 .venv/bin/python -m pytest -q
 .venv/bin/python scripts/self_check.py
 .venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/mypy version.py services/state_machine.py services/availability.py services/retention.py auth.py alert.py
+.venv/bin/python -m pytest -q --cov --cov-report=json:coverage.json
+.venv/bin/python scripts/check_core_coverage.py coverage.json
 ```
 
 Describe the change, how you tested it, and any database migration or rollback steps. Preserve existing API paths and backup compatibility unless the change is explicitly versioned. For schema changes, add an Alembic migration and test upgrade from an older database.

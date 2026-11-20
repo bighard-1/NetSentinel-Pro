@@ -9,7 +9,15 @@ import engine
 import weekly_report
 from database import SessionLocal
 from main import app
-from models import AlertLog, Device, EventType, MonitoringState, NotificationChannel, NotificationChannelType, SystemSetting
+from models import (
+    AlertLog,
+    Device,
+    EventType,
+    MonitoringState,
+    NotificationChannel,
+    NotificationChannelType,
+    SystemSetting,
+)
 from services.secrets import encrypt_secret
 
 
@@ -31,19 +39,40 @@ weekly_report._send_channel_payload = fake_send
 with TestClient(app):
     now = datetime.now(timezone.utc)
     with SessionLocal() as session:
-        device = Device(name="Report", ip_address="127.0.0.1", group_name="ops",
-                        is_monitoring=True, monitoring_state=MonitoringState.PAUSED)
+        device = Device(
+            name="Report",
+            ip_address="127.0.0.1",
+            group_name="ops",
+            is_monitoring=True,
+            monitoring_state=MonitoringState.PAUSED,
+        )
         session.add(device)
         session.flush()
-        session.add_all([
-            AlertLog(device_id=device.id, event_type=EventType.ONLINE,
-                     event_time=now - timedelta(days=8), duration_seconds=0),
-            AlertLog(device_id=device.id, event_type=EventType.OFFLINE,
-                     event_time=now - timedelta(days=1), duration_seconds=0),
-        ])
-        session.add(NotificationChannel(name="Report Webhook", channel_type=NotificationChannelType.WEBHOOK,
-                                        endpoint=encrypt_secret("https://example.com/report"), enabled=True,
-                                        extra_config=""))
+        session.add_all(
+            [
+                AlertLog(
+                    device_id=device.id,
+                    event_type=EventType.ONLINE,
+                    event_time=now - timedelta(days=8),
+                    duration_seconds=0,
+                ),
+                AlertLog(
+                    device_id=device.id,
+                    event_type=EventType.OFFLINE,
+                    event_time=now - timedelta(days=1),
+                    duration_seconds=0,
+                ),
+            ]
+        )
+        session.add(
+            NotificationChannel(
+                name="Report Webhook",
+                channel_type=NotificationChannelType.WEBHOOK,
+                endpoint=encrypt_secret("https://example.com/report"),
+                enabled=True,
+                extra_config="",
+            )
+        )
         session.commit()
     asyncio.run(weekly_report.run_weekly_report_and_cleanup())
     asyncio.run(weekly_report.run_weekly_report_and_cleanup())

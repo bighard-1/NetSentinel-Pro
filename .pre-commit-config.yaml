@@ -1,0 +1,19 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: Ruff lint
+        entry: ruff check --force-exclude
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: Ruff format
+        entry: ruff format --check --force-exclude
+        language: system
+        types: [python]
+      - id: mypy-core
+        name: Mypy core modules
+        entry: mypy version.py services/state_machine.py services/availability.py services/retention.py auth.py alert.py
+        language: system
+        pass_filenames: false
+        types: [python]

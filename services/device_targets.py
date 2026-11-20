@@ -5,14 +5,20 @@ from sqlalchemy import select
 from models import Device, ProbeType
 
 
-def target_key(ip_address: str, probe_type: ProbeType, probe_port: int | None,
-               probe_path: str) -> tuple[str, str, int, str]:
+def target_key(
+    ip_address: str, probe_type: ProbeType, probe_port: int | None, probe_path: str
+) -> tuple[str, str, int, str]:
     return (ip_address, probe_type.value, probe_port or 0, probe_path.strip())
 
 
-def existing_target(session, ip_address: str, probe_type: ProbeType,
-                    probe_port: int | None, probe_path: str,
-                    exclude_id: int | None = None) -> bool:
+def existing_target(
+    session,
+    ip_address: str,
+    probe_type: ProbeType,
+    probe_port: int | None,
+    probe_path: str,
+    exclude_id: int | None = None,
+) -> bool:
     stmt = select(Device.id).where(
         Device.ip_address == ip_address,
         Device.probe_type == probe_type,

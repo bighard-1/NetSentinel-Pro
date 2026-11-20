@@ -29,17 +29,32 @@ def test_dashboard_core_actions() -> None:
         base = f"http://127.0.0.1:{port}"
         environment = os.environ.copy()
         environment.update(
-            ADMIN_USER="e2e-admin", ADMIN_PASS="e2e-strong-password",
-            APP_SECRET="e2e-local-secret", PYTHONPATH=str(PROJECT_ROOT),
-            TMPDIR=test_dir, XDG_CACHE_HOME=test_dir,
+            ADMIN_USER="e2e-admin",
+            ADMIN_PASS="e2e-strong-password",
+            APP_SECRET="e2e-local-secret",
+            PYTHONPATH=str(PROJECT_ROOT),
+            TMPDIR=test_dir,
+            XDG_CACHE_HOME=test_dir,
             PYTHONPYCACHEPREFIX=str(Path(test_dir) / "pycache"),
             PLAYWRIGHT_BROWSERS_PATH=environment.get("PLAYWRIGHT_BROWSERS_PATH", str(Path(test_dir) / "browsers")),
         )
         with (Path(test_dir) / "server.log").open("w") as log_file:
             process = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1",
-                 "--port", str(port), "--no-proxy-headers"],
-                cwd=test_dir, env=environment, stdout=log_file, stderr=subprocess.STDOUT,
+                [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "main:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    "--no-proxy-headers",
+                ],
+                cwd=test_dir,
+                env=environment,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
             )
             try:
                 for _ in range(100):
@@ -88,9 +103,7 @@ def test_dashboard_core_actions() -> None:
 
                     page.get_by_role("button", name="添加设备").click()
                     page.get_by_role("button", name="批量导入", exact=True).click()
-                    page.locator(".dialog textarea").fill(
-                        "Valid,127.0.0.2,Test\nInvalid,not/host,Test\n"
-                    )
+                    page.locator(".dialog textarea").fill("Valid,127.0.0.2,Test\nInvalid,not/host,Test\n")
                     page.get_by_role("button", name="预览并校验").click()
                     page.get_by_text("可导入 1 行，需修正 1 行").wait_for()
                     page.get_by_role("button", name="确认导入 1 行").click()

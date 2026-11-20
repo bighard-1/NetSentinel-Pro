@@ -16,8 +16,10 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix=".bench-p1-", dir=PROJECT_ROOT) as test_dir:
         os.chdir(test_dir)
         os.environ.update(
-            ADMIN_USER="benchmark", ADMIN_PASS="benchmark-only",
-            TMPDIR=test_dir, XDG_CACHE_HOME=test_dir,
+            ADMIN_USER="benchmark",
+            ADMIN_PASS="benchmark-only",
+            TMPDIR=test_dir,
+            XDG_CACHE_HOME=test_dir,
             PYTHONPYCACHEPREFIX=str(Path(test_dir) / "pycache"),
         )
         sys.path.insert(0, str(PROJECT_ROOT))
@@ -36,12 +38,19 @@ def main() -> int:
 
         engine.probe_device = mock_probe
         with TestClient(app) as client:
-            token = client.post("/api/auth/login", json={"username": "benchmark", "password": "benchmark-only"}).json()["access_token"]
+            token = client.post("/api/auth/login", json={"username": "benchmark", "password": "benchmark-only"}).json()[
+                "access_token"
+            ]
             headers = {"Authorization": f"Bearer {token}"}
-            payload = {"devices": [
-                {"name": f"Device {index:04d}", "ip_address": f"10.{index // 65536}.{(index // 256) % 256}.{index % 256}"}
-                for index in range(1000)
-            ]}
+            payload = {
+                "devices": [
+                    {
+                        "name": f"Device {index:04d}",
+                        "ip_address": f"10.{index // 65536}.{(index // 256) % 256}.{index % 256}",
+                    }
+                    for index in range(1000)
+                ]
+            }
             response = client.post("/api/devices/bulk", json=payload, headers=headers)
             assert response.status_code == 200, response.text
             started = time.perf_counter()

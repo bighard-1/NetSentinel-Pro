@@ -36,8 +36,10 @@ def outbox_restart() -> None:
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "p1-test", "password": "p1-test-pass"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        assert client.post("/api/devices", headers=headers,
-                           json={"name": "Outbox", "ip_address": "127.0.0.1"}).status_code == 200
+        assert (
+            client.post("/api/devices", headers=headers, json={"name": "Outbox", "ip_address": "127.0.0.1"}).status_code
+            == 200
+        )
         assert client.post("/api/trigger-monitor", headers=headers).status_code == 200
         wait_for_metric()
         with SessionLocal() as session:
@@ -67,8 +69,10 @@ def dead_letter() -> None:
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "p1-test", "password": "p1-test-pass"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        assert client.post("/api/devices", headers=headers,
-                           json={"name": "Retry", "ip_address": "127.0.0.1"}).status_code == 200
+        assert (
+            client.post("/api/devices", headers=headers, json={"name": "Retry", "ip_address": "127.0.0.1"}).status_code
+            == 200
+        )
         assert client.post("/api/trigger-monitor", headers=headers).status_code == 200
         wait_for_metric()
 
@@ -102,14 +106,19 @@ def restore_rollback() -> None:
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "p1-test", "password": "p1-test-pass"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        assert client.post("/api/devices", headers=headers,
-                           json={"name": "Before", "ip_address": "127.0.0.1"}).status_code == 200
+        assert (
+            client.post("/api/devices", headers=headers, json={"name": "Before", "ip_address": "127.0.0.1"}).status_code
+            == 200
+        )
         original_backup = client.get("/api/backup", headers=headers).content
-        assert client.post("/api/devices", headers=headers,
-                           json={"name": "Keep", "ip_address": "127.0.0.2"}).status_code == 200
+        assert (
+            client.post("/api/devices", headers=headers, json={"name": "Keep", "ip_address": "127.0.0.2"}).status_code
+            == 200
+        )
         backup_module._replace_database = fail_after_swap
-        result = client.post("/api/restore", headers=headers,
-                             files={"file": ("monitor.db", original_backup, "application/octet-stream")})
+        result = client.post(
+            "/api/restore", headers=headers, files={"file": ("monitor.db", original_backup, "application/octet-stream")}
+        )
         assert result.status_code == 500, result.text
         assert calls == 2
         devices = client.get("/api/devices", headers=headers).json()
@@ -131,10 +140,12 @@ def storm_summary() -> None:
             session.commit()
         login = client.post("/api/auth/login", json={"username": "p1-test", "password": "p1-test-pass"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        payload = {"devices": [
-            {"name": f"Storm {index}", "ip_address": f"127.0.0.{index + 1}", "group_name": "storm"}
-            for index in range(3)
-        ]}
+        payload = {
+            "devices": [
+                {"name": f"Storm {index}", "ip_address": f"127.0.0.{index + 1}", "group_name": "storm"}
+                for index in range(3)
+            ]
+        }
         assert client.post("/api/devices/bulk", headers=headers, json=payload).status_code == 200
         assert client.post("/api/trigger-monitor", headers=headers).status_code == 200
         deadline = time.monotonic() + 5
@@ -173,8 +184,9 @@ def probe_retry() -> None:
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "p1-test", "password": "p1-test-pass"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        created = client.post("/api/devices", headers=headers,
-                              json={"name": "Flaky", "ip_address": "127.0.0.1", "probe_retry_count": 1})
+        created = client.post(
+            "/api/devices", headers=headers, json={"name": "Flaky", "ip_address": "127.0.0.1", "probe_retry_count": 1}
+        )
         assert created.status_code == 200, created.text
         assert client.post("/api/trigger-monitor", headers=headers).status_code == 200
         wait_for_metric()
@@ -197,8 +209,12 @@ def infrastructure_failure() -> None:
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "p1-test", "password": "p1-test-pass"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        assert client.post("/api/devices", headers=headers,
-                           json={"name": "Local error", "ip_address": "127.0.0.1"}).status_code == 200
+        assert (
+            client.post(
+                "/api/devices", headers=headers, json={"name": "Local error", "ip_address": "127.0.0.1"}
+            ).status_code
+            == 200
+        )
         assert client.post("/api/trigger-monitor", headers=headers).status_code == 200
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline and not engine.monitor_health.last_error:
@@ -217,8 +233,10 @@ def locked_database_recovers() -> None:
     with TestClient(app) as client:
         login = client.post("/api/auth/login", json={"username": "p1-test", "password": "p1-test-pass"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        assert client.post("/api/devices", headers=headers,
-                           json={"name": "Locked", "ip_address": "127.0.0.1"}).status_code == 200
+        assert (
+            client.post("/api/devices", headers=headers, json={"name": "Locked", "ip_address": "127.0.0.1"}).status_code
+            == 200
+        )
         lock = sqlite3.connect(DB_DIR / "monitor.db")
         try:
             lock.execute("BEGIN IMMEDIATE")
@@ -233,7 +251,12 @@ def locked_database_recovers() -> None:
 
 
 if __name__ == "__main__":
-    {"outbox_restart": outbox_restart, "dead_letter": dead_letter,
-     "restore_rollback": restore_rollback, "storm_summary": storm_summary,
-     "probe_retry": probe_retry, "infrastructure_failure": infrastructure_failure,
-     "locked_database_recovers": locked_database_recovers}[sys.argv[1]]()
+    {
+        "outbox_restart": outbox_restart,
+        "dead_letter": dead_letter,
+        "restore_rollback": restore_rollback,
+        "storm_summary": storm_summary,
+        "probe_retry": probe_retry,
+        "infrastructure_failure": infrastructure_failure,
+        "locked_database_recovers": locked_database_recovers,
+    }[sys.argv[1]]()

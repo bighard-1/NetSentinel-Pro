@@ -14,7 +14,17 @@ from sqlalchemy.exc import OperationalError
 
 from database import SessionLocal
 from logging_service import log_event, logger
-from models import AlertLog, AlertOutbox, Device, EventType, GroupPolicy, MonitoringState, ProbeMetric, ProbeType, SystemSetting
+from models import (
+    AlertLog,
+    AlertOutbox,
+    Device,
+    EventType,
+    GroupPolicy,
+    MonitoringState,
+    ProbeMetric,
+    ProbeType,
+    SystemSetting,
+)
 from services.config import load_config
 from services.state_machine import StatusState, next_state
 
@@ -105,8 +115,15 @@ async def ping(ip_address: str, timeout_seconds: int = 2) -> ProbeResult:
     started_at = time.perf_counter()
     try:
         process = await asyncio.create_subprocess_exec(
-            "ping", count_flag, "1", timeout_flag, timeout_value, "--", ip_address,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            "ping",
+            count_flag,
+            "1",
+            timeout_flag,
+            timeout_value,
+            "--",
+            ip_address,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
     except (FileNotFoundError, PermissionError) as exc:
         raise ProbeInfrastructureError(f"ICMP command unavailable: {exc}") from exc
@@ -122,9 +139,14 @@ async def ping(ip_address: str, timeout_seconds: int = 2) -> ProbeResult:
         raise ProbeInfrastructureError(f"ICMP permission error: {error_text}")
     output = stdout.decode(errors="replace")
     match = re.search(r"\btime[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*ms\b", output)
-    latency_ms = max(1, round(float(match.group(1)))) if match else max(1, int((time.perf_counter() - started_at) * 1000))
-    return ProbeResult(success=process.returncode == 0, latency_ms=latency_ms,
-                       error="" if process.returncode == 0 else (error_text or "ICMP target unreachable"))
+    latency_ms = (
+        max(1, round(float(match.group(1)))) if match else max(1, int((time.perf_counter() - started_at) * 1000))
+    )
+    return ProbeResult(
+        success=process.returncode == 0,
+        latency_ms=latency_ms,
+        error="" if process.returncode == 0 else (error_text or "ICMP target unreachable"),
+    )
 
 
 async def probe_tcp(host: str, port: int, timeout_seconds: int = 3) -> ProbeResult:
@@ -168,7 +190,9 @@ async def probe_http(device: Device, timeout_seconds: int = 5) -> ProbeResult:
             response = await _http_client.get(url, timeout=timeout_seconds)
         latency_ms = max(1, int((time.perf_counter() - started_at) * 1000))
         expected_status = device.expected_status
-        success = 200 <= response.status_code < 400 if expected_status is None else response.status_code == expected_status
+        success = (
+            200 <= response.status_code < 400 if expected_status is None else response.status_code == expected_status
+        )
         return ProbeResult(
             success=success,
             latency_ms=latency_ms,
@@ -265,8 +289,20 @@ def _record_probe_metric_once(
         current = session.get(Device, device.id)
         if current is None or not current.is_monitoring or current.monitoring_state != MonitoringState.ACTIVE:
             return None
-        original_target = (device.ip_address, device.probe_type, device.probe_port, device.probe_path, device.expected_status)
-        current_target = (current.ip_address, current.probe_type, current.probe_port, current.probe_path, current.expected_status)
+        original_target = (
+            device.ip_address,
+            device.probe_type,
+            device.probe_port,
+            device.probe_path,
+            device.expected_status,
+        )
+        current_target = (
+            current.ip_address,
+            current.probe_type,
+            current.probe_port,
+            current.probe_path,
+            current.expected_status,
+        )
         if original_target != current_target:
             return None
 
@@ -284,11 +320,19 @@ def _record_probe_metric_once(
         current.last_checked_at = checked_at
         in_maintenance = current.maintenance_until is not None and _as_utc(current.maintenance_until) > checked_at
         transition = next_state(
-            StatusState(current.current_status, current.status_since,
-                        current.success_streak or 0, current.failure_streak or 0,
-                        current.last_success_at, current.last_error or ""),
-            success=result.success, checked_at=checked_at, error=result.error,
-            offline_threshold=offline_threshold, online_threshold=online_threshold,
+            StatusState(
+                current.current_status,
+                current.status_since,
+                current.success_streak or 0,
+                current.failure_streak or 0,
+                current.last_success_at,
+                current.last_error or "",
+            ),
+            success=result.success,
+            checked_at=checked_at,
+            error=result.error,
+            offline_threshold=offline_threshold,
+            online_threshold=online_threshold,
             in_maintenance=in_maintenance,
         )
         current.current_status = transition.state.status
@@ -310,17 +354,19 @@ def _record_probe_metric_once(
             session.add(event)
             session.flush()
             if transition.notify:
-                session.add(AlertOutbox(
-                    alert_log_id=event.id,
-                    device_id=current.id,
-                    device_name=current.name,
-                    ip_address=current.ip_address,
-                    group_name=current.group_name,
-                    status=next_status.value,
-                    event_time=checked_at,
-                    duration_seconds=duration_seconds,
-                    failure_reason=result.error[:1000] if next_status == EventType.OFFLINE else "",
-                ))
+                session.add(
+                    AlertOutbox(
+                        alert_log_id=event.id,
+                        device_id=current.id,
+                        device_name=current.name,
+                        ip_address=current.ip_address,
+                        group_name=current.group_name,
+                        status=next_status.value,
+                        event_time=checked_at,
+                        duration_seconds=duration_seconds,
+                        failure_reason=result.error[:1000] if next_status == EventType.OFFLINE else "",
+                    )
+                )
 
         committed = CommittedProbe(
             device_id=current.id,
@@ -348,7 +394,7 @@ def _record_probe_metric(
         except OperationalError as exc:
             if "database is locked" not in str(exc).lower() or attempt == 2:
                 raise
-            time.sleep(0.05 * (2 ** attempt))
+            time.sleep(0.05 * (2**attempt))
     raise AssertionError("unreachable")
 
 
@@ -361,7 +407,9 @@ def _record_status_change(
     if event_type == EventType.ONLINE:
         message = f"{committed.device_name} ({committed.ip_address}) 已确认在线"
         if committed.duration_seconds > 0:
-            message = f"{committed.device_name} ({committed.ip_address}) 已恢复在线，离线持续 {committed.duration_seconds} 秒"
+            message = (
+                f"{committed.device_name} ({committed.ip_address}) 已恢复在线，离线持续 {committed.duration_seconds} 秒"
+            )
     else:
         message = f"{committed.device_name} ({committed.ip_address}) 已确认离线"
     if committed.in_maintenance:
@@ -384,12 +432,16 @@ async def _monitor_round(force_probe: bool, target_ids: set[int] | None = None) 
         _load_runtime_settings
     )
     with SessionLocal() as session:
-        devices = session.execute(
-            select(Device).where(
-                Device.is_monitoring.is_(True),
-                Device.monitoring_state == MonitoringState.ACTIVE,
+        devices = (
+            session.execute(
+                select(Device).where(
+                    Device.is_monitoring.is_(True),
+                    Device.monitoring_state == MonitoringState.ACTIVE,
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     if target_ids:
         devices = [device for device in devices if device.id in target_ids]
@@ -476,8 +528,9 @@ async def _wait_for_next_round(
     return False
 
 
-async def monitor_loop(stop_event: asyncio.Event, trigger_event: asyncio.Event | None = None,
-                       target_ids: set[int] | None = None) -> None:
+async def monitor_loop(
+    stop_event: asyncio.Event, trigger_event: asyncio.Event | None = None, target_ids: set[int] | None = None
+) -> None:
     log_event(category="monitor", message="监控引擎已启动")
     monitor_health.started_at = _now_utc()
     monitor_health.completed_at = None
@@ -500,7 +553,9 @@ async def monitor_loop(stop_event: asyncio.Event, trigger_event: asyncio.Event |
             monitor_health.failed_probes = failed
             monitor_health.round_duration_seconds = time.perf_counter() - started
             if monitor_health.round_duration_seconds > interval:
-                logger.warning("monitor round exceeded interval: %.2fs > %ds", monitor_health.round_duration_seconds, interval)
+                logger.warning(
+                    "monitor round exceeded interval: %.2fs > %ds", monitor_health.round_duration_seconds, interval
+                )
             monitor_health.last_error = ""
             force_probe = False
             backoff_seconds = 1

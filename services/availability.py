@@ -9,8 +9,9 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
-def observed_uptime(events: list[tuple[int, EventType, datetime]], device_ids: list[int],
-                    since: datetime, until: datetime) -> tuple[float, int, int]:
+def observed_uptime(
+    events: list[tuple[int, EventType, datetime]], device_ids: list[int], since: datetime, until: datetime
+) -> tuple[float, int, int]:
     """Return percentage, observed seconds and offline seconds for active devices."""
     start, end = _utc(since), _utc(until)
     if end <= start:

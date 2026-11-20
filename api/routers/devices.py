@@ -186,7 +186,9 @@ class RecycleBinOut(BaseModel):
 DeviceDetailOut.model_rebuild()
 
 
-def _validate_probe_config(probe_type: ProbeType, probe_port: int | None, probe_path: str, expected_status: int | None) -> None:
+def _validate_probe_config(
+    probe_type: ProbeType, probe_port: int | None, probe_path: str, expected_status: int | None
+) -> None:
     if any(character.isspace() or ord(character) < 32 for character in probe_path):
         raise HTTPException(status_code=400, detail="probe_path must not contain whitespace or control characters")
     if probe_type == ProbeType.TCP and probe_port is None:
@@ -220,21 +222,30 @@ def _probe_metric_out(metric: ProbeMetric) -> ProbeMetricOut:
 def _probe_trend(session, device_id: int, since: datetime, bucket_format: str) -> list[ProbeTrendBucketOut]:
     bucket = func.strftime(bucket_format, ProbeMetric.checked_at)
     rows = session.execute(
-        select(bucket.label("bucket"), func.count(ProbeMetric.id),
-               func.sum(case((ProbeMetric.success.is_(True), 1), else_=0)),
-               func.avg(case((ProbeMetric.success.is_(True), ProbeMetric.latency_ms), else_=None)))
+        select(
+            bucket.label("bucket"),
+            func.count(ProbeMetric.id),
+            func.sum(case((ProbeMetric.success.is_(True), 1), else_=0)),
+            func.avg(case((ProbeMetric.success.is_(True), ProbeMetric.latency_ms), else_=None)),
+        )
         .where(ProbeMetric.device_id == device_id, ProbeMetric.checked_at >= since)
-        .group_by(bucket).order_by(bucket)
+        .group_by(bucket)
+        .order_by(bucket)
     ).all()
-    return [ProbeTrendBucketOut(bucket=period, total=int(total), successes=int(successes or 0),
-                                success_percent=round(100 * (successes or 0) / total, 1),
-                                latency_avg_ms=round(average, 1) if average is not None else None)
-            for period, total, successes, average in rows]
+    return [
+        ProbeTrendBucketOut(
+            bucket=period,
+            total=int(total),
+            successes=int(successes or 0),
+            success_percent=round(100 * (successes or 0) / total, 1),
+            latency_avg_ms=round(average, 1) if average is not None else None,
+        )
+        for period, total, successes, average in rows
+    ]
 
 
 def _device_out(device: Device) -> DeviceOut:
-    return as_device_out(device, {}, {}, load_probe_interval_seconds(),
-                         load_offline_threshold(device.group_name))
+    return as_device_out(device, {}, {}, load_probe_interval_seconds(), load_offline_threshold(device.group_name))
 
 
 def _alert_history_out(alert: AlertLog, device: Device) -> AlertHistoryOut:
@@ -462,7 +473,9 @@ def _parse_deleted_snapshot_rows(csv_text: str) -> list[dict]:
     return rows
 
 
-def _deleted_snapshot_device_out(row: dict, existing_targets: set[tuple[str, str, int, str]]) -> DeletedSnapshotDeviceOut:
+def _deleted_snapshot_device_out(
+    row: dict, existing_targets: set[tuple[str, str, int, str]]
+) -> DeletedSnapshotDeviceOut:
     return DeletedSnapshotDeviceOut(
         row_index=row["row_index"],
         old_id=row["old_id"],
@@ -477,7 +490,8 @@ def _deleted_snapshot_device_out(row: dict, existing_targets: set[tuple[str, str
         probe_interval_seconds=row["probe_interval_seconds"],
         maintenance_until=row["maintenance_until"],
         maintenance_note=row["maintenance_note"],
-        exists=_target_key(row["ip_address"], row["probe_type"], row["probe_port"], row["probe_path"]) in existing_targets,
+        exists=_target_key(row["ip_address"], row["probe_type"], row["probe_port"], row["probe_path"])
+        in existing_targets,
     )
 
 
@@ -510,9 +524,15 @@ def list_devices() -> list[DeviceOut]:
 @router.get("/export.csv")
 def export_devices_csv(request: Request, operator: str = Depends(current_admin_subject)) -> StreamingResponse:
     rows = load_current_device_statuses()
-    log_event(category="asset", message=f"导出设备清单: {len(rows)} 台",
-              details=_audit_details(action="EXPORT", operator=operator,
-                                     extra={"source_ip": request.client.host if request.client else "unknown"}))
+    log_event(
+        category="asset",
+        message=f"导出设备清单: {len(rows)} 台",
+        details=_audit_details(
+            action="EXPORT",
+            operator=operator,
+            extra={"source_ip": request.client.host if request.client else "unknown"},
+        ),
+    )
     return StreamingResponse(
         _iter_devices_csv(rows),
         media_type="text/csv; charset=utf-8",
@@ -537,30 +557,60 @@ def get_deleted_snapshot(log_id: int, _: None = Depends(verify_admin_token)) -> 
 
 
 @router.get("/delete-snapshots/{log_id}/download")
-def download_deleted_snapshot(log_id: int, request: Request,
-                              operator: str = Depends(current_admin_subject)) -> StreamingResponse:
+def download_deleted_snapshot(
+    log_id: int, request: Request, operator: str = Depends(current_admin_subject)
+) -> StreamingResponse:
     with SessionLocal() as session:
         rows = _load_deleted_snapshot_rows(session, log_id)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["id", "name", "ip_address", "group_name", "monitoring_state", "probe_type",
-                     "probe_port", "probe_path", "expected_status", "probe_interval_seconds",
-                     "maintenance_until", "maintenance_note"])
+    writer.writerow(
+        [
+            "id",
+            "name",
+            "ip_address",
+            "group_name",
+            "monitoring_state",
+            "probe_type",
+            "probe_port",
+            "probe_path",
+            "expected_status",
+            "probe_interval_seconds",
+            "maintenance_until",
+            "maintenance_note",
+        ]
+    )
     for row in rows:
-        writer.writerow([
-            row["old_id"] or "", _safe_csv_cell(row["name"]), row["ip_address"],
-            _safe_csv_cell(row["group_name"]), row["monitoring_state"].value,
-            row["probe_type"].value, row["probe_port"] or "", _safe_csv_cell(row["probe_path"]),
-            row["expected_status"] or "", row["probe_interval_seconds"] or "",
-            row["maintenance_until"].isoformat() if row["maintenance_until"] else "",
-            _safe_csv_cell(row["maintenance_note"]),
-        ])
-    log_event(category="asset", message=f"下载删除快照 CSV: {log_id}",
-              details=_audit_details(action="DOWNLOAD_SNAPSHOT", operator=operator,
-                                     extra={"log_id": log_id,
-                                            "source_ip": request.client.host if request.client else "unknown"}))
-    return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv; charset=utf-8",
-                             headers={"Content-Disposition": f'attachment; filename="deleted-devices-{log_id}.csv"'})
+        writer.writerow(
+            [
+                row["old_id"] or "",
+                _safe_csv_cell(row["name"]),
+                row["ip_address"],
+                _safe_csv_cell(row["group_name"]),
+                row["monitoring_state"].value,
+                row["probe_type"].value,
+                row["probe_port"] or "",
+                _safe_csv_cell(row["probe_path"]),
+                row["expected_status"] or "",
+                row["probe_interval_seconds"] or "",
+                row["maintenance_until"].isoformat() if row["maintenance_until"] else "",
+                _safe_csv_cell(row["maintenance_note"]),
+            ]
+        )
+    log_event(
+        category="asset",
+        message=f"下载删除快照 CSV: {log_id}",
+        details=_audit_details(
+            action="DOWNLOAD_SNAPSHOT",
+            operator=operator,
+            extra={"log_id": log_id, "source_ip": request.client.host if request.client else "unknown"},
+        ),
+    )
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="deleted-devices-{log_id}.csv"'},
+    )
 
 
 @router.get("/delete-snapshots", response_model=list[DeletedSnapshotSummaryOut])
@@ -633,8 +683,9 @@ def restore_deleted_snapshot(
         for index in selected_indexes:
             row = rows_by_index[index]
             key = _target_key(row["ip_address"], row["probe_type"], row["probe_port"], row["probe_path"])
-            if key in restored_keys or _existing_target(session, row["ip_address"], row["probe_type"],
-                                row["probe_port"], row["probe_path"]):
+            if key in restored_keys or _existing_target(
+                session, row["ip_address"], row["probe_type"], row["probe_port"], row["probe_path"]
+            ):
                 skipped += 1
                 continue
             restored_keys.add(key)
@@ -676,16 +727,27 @@ def restore_deleted_snapshot(
 def list_recycle_bin(_: None = Depends(verify_admin_token)) -> list[RecycleBinOut]:
     now = datetime.now(timezone.utc)
     with SessionLocal() as session:
-        entries = session.execute(
-            select(RecycleBinEntry)
-            .where(RecycleBinEntry.expires_at > now, RecycleBinEntry.restored_at.is_(None))
-            .order_by(RecycleBinEntry.id.desc()).limit(100)
-        ).scalars().all()
-        return [RecycleBinOut(
-            id=entry.id, operator=entry.operator, device_count=entry.device_count,
-            created_at=entry.created_at, expires_at=entry.expires_at,
-            device_preview=[row["name"] for row in _parse_deleted_snapshot_rows(entry.snapshot_csv)[:5]],
-        ) for entry in entries]
+        entries = (
+            session.execute(
+                select(RecycleBinEntry)
+                .where(RecycleBinEntry.expires_at > now, RecycleBinEntry.restored_at.is_(None))
+                .order_by(RecycleBinEntry.id.desc())
+                .limit(100)
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            RecycleBinOut(
+                id=entry.id,
+                operator=entry.operator,
+                device_count=entry.device_count,
+                created_at=entry.created_at,
+                expires_at=entry.expires_at,
+                device_preview=[row["name"] for row in _parse_deleted_snapshot_rows(entry.snapshot_csv)[:5]],
+            )
+            for entry in entries
+        ]
 
 
 @router.post("/recycle-bin/{entry_id}/restore")
@@ -700,27 +762,41 @@ def restore_recycle_entry(entry_id: int, operator: str = Depends(current_admin_s
         seen: set[tuple[str, str, int, str]] = set()
         for row in _parse_deleted_snapshot_rows(entry.snapshot_csv):
             key = _target_key(row["ip_address"], row["probe_type"], row["probe_port"], row["probe_path"])
-            if key in seen or _existing_target(session, row["ip_address"], row["probe_type"],
-                                                row["probe_port"], row["probe_path"]):
+            if key in seen or _existing_target(
+                session, row["ip_address"], row["probe_type"], row["probe_port"], row["probe_path"]
+            ):
                 skipped += 1
                 continue
             seen.add(key)
-            session.add(Device(
-                name=row["name"], ip_address=row["ip_address"], group_name=row["group_name"],
-                is_monitoring=row["monitoring_state"] == MonitoringState.ACTIVE,
-                monitoring_state=row["monitoring_state"], maintenance_until=row["maintenance_until"],
-                maintenance_note=row["maintenance_note"], probe_type=row["probe_type"],
-                probe_port=row["probe_port"], probe_path=row["probe_path"],
-                expected_status=row["expected_status"],
-                probe_interval_seconds=row["probe_interval_seconds"],
-                probe_retry_count=row["probe_retry_count"],
-            ))
+            session.add(
+                Device(
+                    name=row["name"],
+                    ip_address=row["ip_address"],
+                    group_name=row["group_name"],
+                    is_monitoring=row["monitoring_state"] == MonitoringState.ACTIVE,
+                    monitoring_state=row["monitoring_state"],
+                    maintenance_until=row["maintenance_until"],
+                    maintenance_note=row["maintenance_note"],
+                    probe_type=row["probe_type"],
+                    probe_port=row["probe_port"],
+                    probe_path=row["probe_path"],
+                    expected_status=row["expected_status"],
+                    probe_interval_seconds=row["probe_interval_seconds"],
+                    probe_retry_count=row["probe_retry_count"],
+                )
+            )
             restored += 1
         entry.restored_at = now
         session.commit()
-    log_event(category="asset", message=f"从回收站恢复设备: {restored} 台，跳过 {skipped}",
-              details=_audit_details(action="RESTORE", operator=operator,
-                                     extra={"recycle_id": entry_id, "restored": restored, "skipped": skipped}))
+    log_event(
+        category="asset",
+        message=f"从回收站恢复设备: {restored} 台，跳过 {skipped}",
+        details=_audit_details(
+            action="RESTORE",
+            operator=operator,
+            extra={"recycle_id": entry_id, "restored": restored, "skipped": skipped},
+        ),
+    )
     return {"status": "success", "restored": restored, "skipped": skipped}
 
 
@@ -744,12 +820,13 @@ def get_device_detail(device_id: int, _: None = Depends(verify_admin_token)) -> 
         if device is None:
             raise HTTPException(status_code=404, detail="Device not found")
 
-        alert_rows = session.execute(
-            select(AlertLog)
-            .where(AlertLog.device_id == device_id)
-            .order_by(desc(AlertLog.id))
-            .limit(100)
-        ).scalars().all()
+        alert_rows = (
+            session.execute(
+                select(AlertLog).where(AlertLog.device_id == device_id).order_by(desc(AlertLog.id)).limit(100)
+            )
+            .scalars()
+            .all()
+        )
         alerts_24h = session.execute(
             select(func.count(AlertLog.id)).where(
                 AlertLog.device_id == device_id,
@@ -771,18 +848,23 @@ def get_device_detail(device_id: int, _: None = Depends(verify_admin_token)) -> 
                 AlertLog.duration_seconds > 0,
             )
         ).scalar_one()
-        metric_rows = session.execute(
-            select(ProbeMetric)
-            .where(ProbeMetric.device_id == device_id)
-            .order_by(desc(ProbeMetric.id))
-            .limit(60)
-        ).scalars().all()
-        metrics_24h = session.execute(
-            select(ProbeMetric).where(
-                ProbeMetric.device_id == device_id,
-                ProbeMetric.checked_at >= since_24h,
+        metric_rows = (
+            session.execute(
+                select(ProbeMetric).where(ProbeMetric.device_id == device_id).order_by(desc(ProbeMetric.id)).limit(60)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
+        metrics_24h = (
+            session.execute(
+                select(ProbeMetric).where(
+                    ProbeMetric.device_id == device_id,
+                    ProbeMetric.checked_at >= since_24h,
+                )
+            )
+            .scalars()
+            .all()
+        )
 
         successful_latencies = [m.latency_ms for m in metrics_24h if m.success and m.latency_ms is not None]
         latency_avg = round(sum(successful_latencies) / len(successful_latencies), 1) if successful_latencies else None
@@ -793,8 +875,7 @@ def get_device_detail(device_id: int, _: None = Depends(verify_admin_token)) -> 
 
         probe_interval = load_probe_interval_seconds()
         return DeviceDetailOut(
-            device=as_device_out(device, {}, {}, probe_interval,
-                                 load_offline_threshold(device.group_name)),
+            device=as_device_out(device, {}, {}, probe_interval, load_offline_threshold(device.group_name)),
             alerts=[_alert_history_out(alert, device) for alert in alert_rows],
             alerts_24h=int(alerts_24h),
             offline_count_7d=int(offline_count_7d),
@@ -809,8 +890,9 @@ def get_device_detail(device_id: int, _: None = Depends(verify_admin_token)) -> 
 
 
 @router.post("/{device_id}/probe")
-def trigger_device_probe(device_id: int, request: Request,
-                         operator: str = Depends(current_admin_subject)) -> dict[str, str]:
+def trigger_device_probe(
+    device_id: int, request: Request, operator: str = Depends(current_admin_subject)
+) -> dict[str, str]:
     with SessionLocal() as session:
         device = session.get(Device, device_id)
         if device is None:
@@ -825,8 +907,12 @@ def trigger_device_probe(device_id: int, request: Request,
     request.app.state.last_device_trigger_ts[device_id] = now
     request.app.state.monitor_target_ids.add(device_id)
     request.app.state.monitor_trigger_event.set()
-    log_event(category="monitor", message=f"管理员触发单设备探测: {device_name}", device_id=device_id,
-              details=_audit_details(action="PROBE", operator=operator, device_id=device_id))
+    log_event(
+        category="monitor",
+        message=f"管理员触发单设备探测: {device_name}",
+        device_id=device_id,
+        details=_audit_details(action="PROBE", operator=operator, device_id=device_id),
+    )
     return {"status": "queued", "message": "设备探测已排队"}
 
 
@@ -854,7 +940,9 @@ def update_device_maintenance(
             category="asset",
             message=f"取消维护模式: {device.name} ({device.ip_address})",
             device_id=device.id,
-            details=_audit_details(action="MAINTENANCE", operator=operator, **_device_ref(device), extra={"maintenance": "clear"}),
+            details=_audit_details(
+                action="MAINTENANCE", operator=operator, **_device_ref(device), extra={"maintenance": "clear"}
+            ),
         )
     else:
         log_event(
@@ -875,8 +963,7 @@ def update_device_maintenance(
 @router.post("", response_model=DeviceOut)
 def create_device(payload: DeviceCreate, operator: str = Depends(current_admin_subject)) -> DeviceOut:
     with SessionLocal() as session:
-        if _existing_target(session, payload.ip_address, payload.probe_type,
-                            payload.probe_port, payload.probe_path):
+        if _existing_target(session, payload.ip_address, payload.probe_type, payload.probe_port, payload.probe_path):
             raise HTTPException(status_code=400, detail="probe target already exists")
 
         _validate_probe_config(payload.probe_type, payload.probe_port, payload.probe_path, payload.expected_status)
@@ -908,14 +995,17 @@ def create_device(payload: DeviceCreate, operator: str = Depends(current_admin_s
 
 
 @router.post("/bulk-preview")
-def preview_devices_bulk(payload: BulkImportPreviewRequest,
-                         _: str = Depends(current_admin_subject)) -> dict:
+def preview_devices_bulk(payload: BulkImportPreviewRequest, _: str = Depends(current_admin_subject)) -> dict:
     try:
         reader = csv.reader(io.StringIO(payload.text.lstrip("\ufeff")), strict=True)
         parsed_rows = [(reader.line_num, row) for row in reader]
     except csv.Error as exc:
         raise HTTPException(status_code=400, detail="CSV 格式无效，请检查引号和分隔符") from exc
-    if parsed_rows and len(parsed_rows[0][1]) >= 2 and [cell.strip().lower() for cell in parsed_rows[0][1][:2]] == ["name", "ip_address"]:
+    if (
+        parsed_rows
+        and len(parsed_rows[0][1]) >= 2
+        and [cell.strip().lower() for cell in parsed_rows[0][1][:2]] == ["name", "ip_address"]
+    ):
         parsed_rows = parsed_rows[1:]
     parsed_rows = [(line, row) for line, row in parsed_rows if any(cell.strip() for cell in row)]
     if len(parsed_rows) > 1000:
@@ -931,11 +1021,22 @@ def preview_devices_bulk(payload: BulkImportPreviewRequest,
     seen_targets: set[tuple[str, str, int, str]] = set()
     preview: list[dict] = []
     accepted: list[dict] = []
-    labels = {"name": "设备名称", "ip_address": "IP/主机名", "group_name": "分组",
-              "probe_type": "探测类型", "probe_port": "端口", "probe_path": "探测路径"}
+    labels = {
+        "name": "设备名称",
+        "ip_address": "IP/主机名",
+        "group_name": "分组",
+        "probe_type": "探测类型",
+        "probe_port": "端口",
+        "probe_path": "探测路径",
+    }
     for line, row in parsed_rows:
-        entry: dict = {"line": line, "name": row[0].strip() if row else "",
-                       "ip_address": row[1].strip() if len(row) > 1 else "", "raw": row, "error": ""}
+        entry: dict = {
+            "line": line,
+            "name": row[0].strip() if row else "",
+            "ip_address": row[1].strip() if len(row) > 1 else "",
+            "raw": row,
+            "error": "",
+        }
         try:
             if len(row) not in {3, 6}:
                 raise ValueError("应填写 3 列（名称,地址,分组）或 6 列（再加类型,端口,路径）")
@@ -946,10 +1047,16 @@ def preview_devices_bulk(payload: BulkImportPreviewRequest,
             except ValueError as exc:
                 raise ValueError("端口必须是 1 至 65535 的整数") from exc
             probe_path = row[5].strip() if len(row) == 6 else ""
-            device = DeviceCreate.model_validate({
-                "name": name, "ip_address": host, "group_name": group or "default",
-                "probe_type": probe_type, "probe_port": probe_port, "probe_path": probe_path,
-            })
+            device = DeviceCreate.model_validate(
+                {
+                    "name": name,
+                    "ip_address": host,
+                    "group_name": group or "default",
+                    "probe_type": probe_type,
+                    "probe_port": probe_port,
+                    "probe_path": probe_path,
+                }
+            )
             _validate_probe_config(device.probe_type, device.probe_port, device.probe_path, device.expected_status)
             key = _target_key(device.ip_address, device.probe_type, device.probe_port, device.probe_path)
             if key in existing_targets or key in seen_targets:
@@ -974,7 +1081,9 @@ def preview_devices_bulk(payload: BulkImportPreviewRequest,
 
 
 @router.post("/bulk")
-def create_devices_bulk(payload: DeviceBulkCreate, operator: str = Depends(current_admin_subject)) -> dict[str, int | str]:
+def create_devices_bulk(
+    payload: DeviceBulkCreate, operator: str = Depends(current_admin_subject)
+) -> dict[str, int | str]:
     imported = 0
     skipped = 0
     seen_targets: set[tuple[str, str, int, str]] = set()
@@ -982,8 +1091,9 @@ def create_devices_bulk(payload: DeviceBulkCreate, operator: str = Depends(curre
         for item in payload.devices:
             _validate_probe_config(item.probe_type, item.probe_port, item.probe_path, item.expected_status)
             target = _target_key(item.ip_address, item.probe_type, item.probe_port, item.probe_path)
-            if target in seen_targets or _existing_target(session, item.ip_address, item.probe_type,
-                                                          item.probe_port, item.probe_path):
+            if target in seen_targets or _existing_target(
+                session, item.ip_address, item.probe_type, item.probe_port, item.probe_path
+            ):
                 skipped += 1
                 continue
             seen_targets.add(target)
@@ -1009,13 +1119,17 @@ def create_devices_bulk(payload: DeviceBulkCreate, operator: str = Depends(curre
     log_event(
         category="asset",
         message=f"批量导入设备完成: 新增 {imported}，跳过 {skipped}",
-        details=_audit_details(action="BULK_CREATE", operator=operator, extra={"imported": imported, "skipped": skipped}),
+        details=_audit_details(
+            action="BULK_CREATE", operator=operator, extra={"imported": imported, "skipped": skipped}
+        ),
     )
     return {"status": "success", "imported": imported, "skipped": skipped}
 
 
 @router.put("/bulk-update")
-def update_devices_bulk(payload: DeviceBulkUpdate, operator: str = Depends(current_admin_subject)) -> dict[str, int | str]:
+def update_devices_bulk(
+    payload: DeviceBulkUpdate, operator: str = Depends(current_admin_subject)
+) -> dict[str, int | str]:
     fields = payload.model_fields_set - {"device_ids"}
     if not fields:
         raise HTTPException(status_code=400, detail="No update fields provided")
@@ -1144,14 +1258,15 @@ def update_device(device_id: int, payload: DeviceUpdate, operator: str = Depends
         elif probe_type == ProbeType.HTTP:
             probe_port = None
             probe_path = payload.probe_path if "probe_path" in provided_fields else device.probe_path
-            expected_status = payload.expected_status if "expected_status" in provided_fields else device.expected_status
+            expected_status = (
+                payload.expected_status if "expected_status" in provided_fields else device.expected_status
+            )
         else:
             probe_port = None
             probe_path = ""
             expected_status = None
         _validate_probe_config(probe_type, probe_port, probe_path or "", expected_status)
-        if _existing_target(session, device.ip_address, probe_type, probe_port,
-                            probe_path or "", exclude_id=device_id):
+        if _existing_target(session, device.ip_address, probe_type, probe_port, probe_path or "", exclude_id=device_id):
             raise HTTPException(status_code=400, detail="probe target already exists")
         device.probe_type = probe_type
         device.probe_port = probe_port
@@ -1235,8 +1350,9 @@ def delete_device(device_id: int, operator: str = Depends(current_admin_subject)
             target_name=name,
             target_ip=ip_address,
             device_id=device_id,
-            extra={"group_name": group_name, "recycle_id": recycle_id,
-                   "snapshot_file": snapshot_path},
-        ) + "\nCSV_SNAPSHOT_START\n" + csv_snapshot,
+            extra={"group_name": group_name, "recycle_id": recycle_id, "snapshot_file": snapshot_path},
+        )
+        + "\nCSV_SNAPSHOT_START\n"
+        + csv_snapshot,
     )
     return {"status": "deleted", "recycle_id": recycle_id}

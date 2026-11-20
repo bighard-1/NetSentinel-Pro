@@ -23,8 +23,14 @@ from api.routers.events import router as events_router
 from api.routers.groups import router as groups_router
 from api.routers.notifications import router as notifications_router
 from api.routers.settings import router as settings_router
-from auth import (create_admin_token, credential_role, is_admin_configured,
-                  revoke_token_value, verify_admin_token_value, weak_admin_password)
+from auth import (
+    create_admin_token,
+    credential_role,
+    is_admin_configured,
+    revoke_token_value,
+    verify_admin_token_value,
+    weak_admin_password,
+)
 from database import Base, engine
 from engine import close_http_client, monitor_health, monitor_loop, shutdown_monitor_task, start_http_client
 from logging_service import configure_logging, log_event, logger
@@ -86,8 +92,11 @@ def _record_login_failure(key: str) -> None:
     failures.append(now)
     _login_failures[key] = failures
     if len(_login_failures) > config.login_max_buckets:
-        expired = [name for name, timestamps in _login_failures.items()
-                   if not timestamps or now - timestamps[-1] >= config.login_window_seconds]
+        expired = [
+            name
+            for name, timestamps in _login_failures.items()
+            if not timestamps or now - timestamps[-1] >= config.login_window_seconds
+        ]
         for name in expired:
             _login_failures.pop(name, None)
         while len(_login_failures) > config.login_max_buckets:
@@ -122,15 +131,12 @@ async def lifespan(app: FastAPI):
     app.state.monitor_target_ids = set()
     app.state.last_device_trigger_ts = {}
     app.state.monitor_task = asyncio.create_task(
-        monitor_loop(app.state.monitor_stop_event, app.state.monitor_trigger_event,
-                     app.state.monitor_target_ids)
+        monitor_loop(app.state.monitor_stop_event, app.state.monitor_trigger_event, app.state.monitor_target_ids)
     )
     app.state.last_manual_trigger_ts = 0.0
 
     app.state.alert_stop_event = asyncio.Event()
-    app.state.alert_task = asyncio.create_task(
-        alert_dispatch_loop(app.state.alert_stop_event)
-    )
+    app.state.alert_task = asyncio.create_task(alert_dispatch_loop(app.state.alert_stop_event))
 
     app.state.scheduler = AsyncIOScheduler(timezone=ZoneInfo(str(load_weekly_report_config()["timezone"])))
     schedule_weekly_report_job(app.state.scheduler)
@@ -156,10 +162,14 @@ async def lifespan(app: FastAPI):
 
 
 ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() == "true"
-app = FastAPI(title="NetSentinel Pro", version=__version__, lifespan=lifespan,
-              docs_url="/docs" if ENABLE_DOCS else None,
-              redoc_url="/redoc" if ENABLE_DOCS else None,
-              openapi_url="/openapi.json" if ENABLE_DOCS else None)
+app = FastAPI(
+    title="NetSentinel Pro",
+    version=__version__,
+    lifespan=lifespan,
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url="/redoc" if ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
+)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(backup_router)
 app.include_router(dashboard_router)
@@ -178,11 +188,21 @@ async def add_security_headers(request: Request, call_next):
         token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else ""
         payload = verify_admin_token_value(token) if token else None
         if payload is None:
-            return JSONResponse(status_code=401, content={"detail": "Missing or invalid bearer token"},
-                                headers={"Cache-Control": "no-store"})
-        if payload["scope"] == "viewer" and request.method not in {"GET", "HEAD", "OPTIONS"} and path != "/api/auth/logout":
-            return JSONResponse(status_code=403, content={"detail": "Viewer account is read only"},
-                                headers={"Cache-Control": "no-store"})
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing or invalid bearer token"},
+                headers={"Cache-Control": "no-store"},
+            )
+        if (
+            payload["scope"] == "viewer"
+            and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and path != "/api/auth/logout"
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Viewer account is read only"},
+                headers={"Cache-Control": "no-store"},
+            )
     if path in {"/api/devices/bulk", "/api/devices/bulk-preview"} and request.method == "POST":
         if "content-length" not in request.headers:
             return JSONResponse(status_code=411, content={"detail": "Content-Length is required"})
@@ -261,7 +281,11 @@ def login(payload: LoginRequest, request: Request) -> LoginOut:
     if _is_login_limited(ip_key) or _is_login_limited(username_key):
         time.sleep(0.15)
         log_event(category="auth", message=f"管理员登录被限流: {payload.username}", level="WARNING")
-        raise HTTPException(status_code=429, detail="登录失败次数过多，请稍后再试", headers={"Retry-After": str(load_config().login_window_seconds)})
+        raise HTTPException(
+            status_code=429,
+            detail="登录失败次数过多，请稍后再试",
+            headers={"Retry-After": str(load_config().login_window_seconds)},
+        )
     role = credential_role(payload.username, payload.password)
     if role is None:
         time.sleep(0.15)

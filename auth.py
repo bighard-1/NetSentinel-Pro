@@ -34,8 +34,16 @@ def credential_role(username: str, password: str) -> str | None:
     config = load_config()
     viewer_user = config.viewer_user.strip()
     viewer_pass = config.viewer_pass.get_secret_value().strip()
-    admin_match = bool(admin_user and admin_pass) and hmac.compare_digest(username, admin_user) and hmac.compare_digest(password, admin_pass)
-    viewer_match = bool(viewer_user and viewer_pass) and hmac.compare_digest(username, viewer_user) and hmac.compare_digest(password, viewer_pass)
+    admin_match = (
+        bool(admin_user and admin_pass)
+        and hmac.compare_digest(username, admin_user)
+        and hmac.compare_digest(password, admin_pass)
+    )
+    viewer_match = (
+        bool(viewer_user and viewer_pass)
+        and hmac.compare_digest(username, viewer_user)
+        and hmac.compare_digest(password, viewer_pass)
+    )
     return "admin" if admin_match else "viewer" if viewer_match else None
 
 
@@ -106,9 +114,11 @@ def revoke_token_value(token: str) -> bool:
     if payload is None:
         return False
     with SessionLocal() as session:
-        session.add(RevokedToken(
-            jti=str(payload["jti"]),
-            expires_at=datetime.fromtimestamp(int(payload["exp"]), timezone.utc),
-        ))
+        session.add(
+            RevokedToken(
+                jti=str(payload["jti"]),
+                expires_at=datetime.fromtimestamp(int(payload["exp"]), timezone.utc),
+            )
+        )
         session.commit()
     return True

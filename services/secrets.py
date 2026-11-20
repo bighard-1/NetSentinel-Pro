@@ -30,7 +30,7 @@ def encrypt_secret(value: str) -> str:
 def decrypt_secret(value: str) -> str:
     if not value or not value.startswith(PREFIX):
         return value or ""
-    return _cipher().decrypt(value[len(PREFIX):].encode("ascii")).decode("utf-8")
+    return _cipher().decrypt(value[len(PREFIX) :].encode("ascii")).decode("utf-8")
 
 
 def mask_secret(value: str) -> str:

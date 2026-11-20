@@ -36,8 +36,9 @@ def _validate_sqlite_backup(path: Path) -> None:
             if not result or result[0] != "ok":
                 raise ValueError("SQLite integrity check failed")
             schema_rows = list(conn.execute("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"))
-            if any(kind in {"trigger", "view"} or (sql and "ATTACH" in sql.upper())
-                   for kind, _name, sql in schema_rows):
+            if any(
+                kind in {"trigger", "view"} or (sql and "ATTACH" in sql.upper()) for kind, _name, sql in schema_rows
+            ):
                 raise ValueError("Backup contains unsupported schema objects")
             tables = {name for kind, name, _sql in schema_rows if kind == "table"}
             if not {"devices", "alert_logs", "system_settings"}.issubset(tables):
@@ -62,8 +63,11 @@ def download_backup(request: Request, operator: str = Depends(current_admin_subj
     except Exception:
         snapshot_path.unlink(missing_ok=True)
         raise
-    log_event(category="backup", message="管理员下载数据库备份",
-              details=f"operator={operator}\nsource_ip={request.client.host if request.client else 'unknown'}")
+    log_event(
+        category="backup",
+        message="管理员下载数据库备份",
+        details=f"operator={operator}\nsource_ip={request.client.host if request.client else 'unknown'}",
+    )
     return FileResponse(
         path=snapshot_path,
         filename="monitor.db",
@@ -91,8 +95,11 @@ def _resume_background_jobs(request: Request) -> None:
     request.app.state.monitor_trigger_event = asyncio.Event()
     request.app.state.monitor_target_ids = set()
     request.app.state.monitor_task = asyncio.create_task(
-        monitor_loop(request.app.state.monitor_stop_event, request.app.state.monitor_trigger_event,
-                     request.app.state.monitor_target_ids)
+        monitor_loop(
+            request.app.state.monitor_stop_event,
+            request.app.state.monitor_trigger_event,
+            request.app.state.monitor_target_ids,
+        )
     )
     request.app.state.alert_stop_event = asyncio.Event()
     request.app.state.alert_task = asyncio.create_task(alert_dispatch_loop(request.app.state.alert_stop_event))
@@ -115,7 +122,9 @@ def _replace_database(source_path: Path) -> None:
 
 
 @router.post("/restore")
-async def restore_backup(request: Request, file: UploadFile = File(...), _: None = Depends(verify_admin_token)) -> dict[str, str]:
+async def restore_backup(
+    request: Request, file: UploadFile = File(...), _: None = Depends(verify_admin_token)
+) -> dict[str, str]:
     if not file.filename or not file.filename.lower().endswith(".db"):
         raise HTTPException(status_code=400, detail="Only .db file is accepted")
 
@@ -153,7 +162,9 @@ async def restore_backup(request: Request, file: UploadFile = File(...), _: None
                 await asyncio.to_thread(_replace_database, rollback_path)
             except Exception as rollback_error:
                 safe_to_resume = False
-                raise HTTPException(status_code=500, detail="数据库自动回滚失败；服务已停止后台写入，请从恢复前备份手动恢复") from rollback_error
+                raise HTTPException(
+                    status_code=500, detail="数据库自动回滚失败；服务已停止后台写入，请从恢复前备份手动恢复"
+                ) from rollback_error
         raise HTTPException(status_code=500, detail="数据库恢复失败，已保留升级前备份") from exc
     finally:
         temp_path.unlink(missing_ok=True)

@@ -5,7 +5,6 @@ from contextlib import closing
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
-from sqlalchemy import select
 
 from database import Base, DB_DIR, SessionLocal, engine
 from main import app
@@ -15,14 +14,28 @@ from models import AlertLog, Device, EventType, MonitoringState, ProbeMetric
 def legacy_target_migration() -> None:
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as session:
-        device = Device(name="Original", ip_address="127.0.0.1", group_name="ops",
-                        is_monitoring=False, monitoring_state=MonitoringState.PAUSED)
+        device = Device(
+            name="Original",
+            ip_address="127.0.0.1",
+            group_name="ops",
+            is_monitoring=False,
+            monitoring_state=MonitoringState.PAUSED,
+        )
         session.add(device)
         session.flush()
-        session.add(AlertLog(device_id=device.id, event_type=EventType.ONLINE,
-                             event_time=datetime.now(timezone.utc), duration_seconds=0))
-        session.add(ProbeMetric(device_id=device.id, probe_type="ICMP", success=True,
-                                error="", checked_at=datetime.now(timezone.utc)))
+        session.add(
+            AlertLog(
+                device_id=device.id,
+                event_type=EventType.ONLINE,
+                event_time=datetime.now(timezone.utc),
+                duration_seconds=0,
+            )
+        )
+        session.add(
+            ProbeMetric(
+                device_id=device.id, probe_type="ICMP", success=True, error="", checked_at=datetime.now(timezone.utc)
+            )
+        )
         session.commit()
     engine.dispose()
     database_path = DB_DIR / "monitor.db"
@@ -48,17 +61,29 @@ def legacy_target_migration() -> None:
         assert original.status_code == 200, original.text
         assert original.json()[0]["name"] == "Original"
         assert original.json()[0]["latest_status"] == "UNKNOWN"
-        tcp = client.post("/api/devices", headers=headers,
-            json={"name": "TCP 443", "ip_address": "127.0.0.1", "probe_type": "TCP", "probe_port": 443})
+        tcp = client.post(
+            "/api/devices",
+            headers=headers,
+            json={"name": "TCP 443", "ip_address": "127.0.0.1", "probe_type": "TCP", "probe_port": 443},
+        )
         assert tcp.status_code == 200, tcp.text
-        http = client.post("/api/devices", headers=headers,
-            json={"name": "HTTP", "ip_address": "127.0.0.1", "probe_type": "HTTP", "probe_path": "/health"})
+        http = client.post(
+            "/api/devices",
+            headers=headers,
+            json={"name": "HTTP", "ip_address": "127.0.0.1", "probe_type": "HTTP", "probe_path": "/health"},
+        )
         assert http.status_code == 200, http.text
-        other_tcp = client.post("/api/devices", headers=headers,
-            json={"name": "TCP 8443", "ip_address": "127.0.0.1", "probe_type": "TCP", "probe_port": 8443})
+        other_tcp = client.post(
+            "/api/devices",
+            headers=headers,
+            json={"name": "TCP 8443", "ip_address": "127.0.0.1", "probe_type": "TCP", "probe_port": 8443},
+        )
         assert other_tcp.status_code == 200, other_tcp.text
-        duplicate = client.post("/api/devices", headers=headers,
-            json={"name": "Duplicate", "ip_address": "127.0.0.1", "probe_type": "TCP", "probe_port": 443})
+        duplicate = client.post(
+            "/api/devices",
+            headers=headers,
+            json={"name": "Duplicate", "ip_address": "127.0.0.1", "probe_type": "TCP", "probe_port": 443},
+        )
         assert duplicate.status_code == 400
         with engine.connect() as connection:
             assert connection.exec_driver_sql("PRAGMA foreign_key_check").fetchone() is None

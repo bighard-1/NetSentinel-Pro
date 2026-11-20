@@ -22,3 +22,10 @@ python_version = "3.12"
 ignore_missing_imports = true
 check_untyped_defs = true
 exclude = "(^tests/|^migrations/|^static/)"
+
+[tool.coverage.run]
+patch = ["subprocess"]
+source = ["alert", "auth", "services.state_machine", "services.retention"]
+
+[tool.coverage.report]
+show_missing = true

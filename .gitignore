@@ -2,6 +2,11 @@
 *.pyc
 .venv/
 .pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
 .test-p0-*/
 .test-p1-*/
 .test-p2-*/

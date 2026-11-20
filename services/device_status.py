@@ -88,8 +88,10 @@ def as_device_out(
     latest_status = device.current_status.value if device.current_status else "UNKNOWN"
     latest_event_time = device.status_since
     in_maintenance = is_in_maintenance(device)
-    monitoring_state = device.monitoring_state.value if device.monitoring_state else (
-        MonitoringState.ACTIVE.value if device.is_monitoring else MonitoringState.PAUSED.value
+    monitoring_state = (
+        device.monitoring_state.value
+        if device.monitoring_state
+        else (MonitoringState.ACTIVE.value if device.is_monitoring else MonitoringState.PAUSED.value)
     )
     latest_probe_time = device.last_checked_at
     probe_interval_seconds = max(
@@ -141,8 +143,9 @@ def load_latest_status_map(device_ids: list[int]) -> dict[int, tuple[str, dateti
 
     with SessionLocal() as session:
         rows = session.execute(
-            select(Device.id, Device.current_status, Device.status_since)
-            .where(Device.id.in_(device_ids), Device.current_status.is_not(None))
+            select(Device.id, Device.current_status, Device.status_since).where(
+                Device.id.in_(device_ids), Device.current_status.is_not(None)
+            )
         )
         return {device_id: (status.value, since) for device_id, status, since in rows}
 
@@ -153,8 +156,9 @@ def load_latest_probe_map(device_ids: list[int]) -> dict[int, datetime | None]:
 
     with SessionLocal() as session:
         rows = session.execute(
-            select(Device.id, Device.last_checked_at)
-            .where(Device.id.in_(device_ids), Device.last_checked_at.is_not(None))
+            select(Device.id, Device.last_checked_at).where(
+                Device.id.in_(device_ids), Device.last_checked_at.is_not(None)
+            )
         )
         return {device_id: checked_at for device_id, checked_at in rows}
 
@@ -170,9 +174,7 @@ def load_probe_interval_seconds() -> int:
 def load_offline_threshold(group_name: str) -> int:
     with SessionLocal() as session:
         setting = session.execute(select(SystemSetting).limit(1)).scalar_one_or_none()
-        policy = session.execute(
-            select(GroupPolicy).where(GroupPolicy.group_name == group_name)
-        ).scalar_one_or_none()
+        policy = session.execute(select(GroupPolicy).where(GroupPolicy.group_name == group_name)).scalar_one_or_none()
     return max(1, int(policy.offline_threshold if policy else setting.offline_threshold if setting else 3))
 
 
@@ -180,21 +182,38 @@ def load_current_device_statuses() -> list[DeviceOut]:
     with SessionLocal() as session:
         devices = session.execute(select(Device).order_by(Device.id.asc())).scalars().all()
         setting = session.execute(select(SystemSetting).limit(1)).scalar_one_or_none()
-        policies = {policy.group_name: policy.offline_threshold for policy in
-                    session.execute(select(GroupPolicy)).scalars().all()}
+        policies = {
+            policy.group_name: policy.offline_threshold
+            for policy in session.execute(select(GroupPolicy)).scalars().all()
+        }
         latest_metric_id = (
-            select(ProbeMetric.id).where(ProbeMetric.device_id == Device.id)
-            .order_by(ProbeMetric.id.desc()).limit(1).correlate(Device).scalar_subquery()
+            select(ProbeMetric.id)
+            .where(ProbeMetric.device_id == Device.id)
+            .order_by(ProbeMetric.id.desc())
+            .limit(1)
+            .correlate(Device)
+            .scalar_subquery()
         )
-        latency = dict(session.execute(
-            select(Device.id, ProbeMetric.latency_ms).select_from(Device)
-            .outerjoin(ProbeMetric, ProbeMetric.id == latest_metric_id)
-        ).all())
+        latency = dict(
+            session.execute(
+                select(Device.id, ProbeMetric.latency_ms)
+                .select_from(Device)
+                .outerjoin(ProbeMetric, ProbeMetric.id == latest_metric_id)
+            ).all()
+        )
         probe_interval_seconds = max(1, int(setting.ping_interval if setting else DEFAULT_PROBE_INTERVAL_SECONDS))
         default_threshold = max(1, int(setting.offline_threshold if setting else 3))
-    return [as_device_out(device, {}, {}, probe_interval_seconds,
-                          policies.get(device.group_name, default_threshold),
-                          latency.get(device.id)) for device in devices]
+    return [
+        as_device_out(
+            device,
+            {},
+            {},
+            probe_interval_seconds,
+            policies.get(device.group_name, default_threshold),
+            latency.get(device.id),
+        )
+        for device in devices
+    ]
 
 
 def device_uptime_percent_7d(offline_seconds: int) -> float:

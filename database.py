@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -25,6 +25,7 @@ def configure_sqlite(dbapi_connection, _connection_record) -> None:
         cursor.execute("PRAGMA foreign_keys=ON")
     finally:
         cursor.close()
+
 
 SessionLocal = sessionmaker(
     bind=engine,

@@ -26,7 +26,9 @@ def main() -> int:
         from engine import _http_url
         from models import Device, ProbeType
 
-        assert _http_url(Device(ip_address="::1", probe_type=ProbeType.HTTP, probe_path="health")) == "http://[::1]/health"
+        assert (
+            _http_url(Device(ip_address="::1", probe_type=ProbeType.HTTP, probe_path="health")) == "http://[::1]/health"
+        )
 
         with TestClient(app) as client:
             health = client.get("/health")
@@ -168,7 +170,7 @@ def main() -> int:
                     "channel_type": "WEBHOOK",
                     "endpoint": "",
                     "enabled": True,
-                    "extra_config": "{\"env\":\"self-check\"}",
+                    "extra_config": '{"env":"self-check"}',
                 },
             )
             assert channel.status_code == 200, channel.text
@@ -359,7 +361,9 @@ def main() -> int:
             assert "CSV_SNAPSHOT_START" in delete_audit["details"]
             assert "Second,127.0.0.2,bulk-check" in delete_audit["details"]
             assert "Localhost,127.0.0.1,bulk-check" in delete_audit["details"]
-            snapshot_line = next(line for line in delete_audit["details"].splitlines() if line.startswith("snapshot_file="))
+            snapshot_line = next(
+                line for line in delete_audit["details"].splitlines() if line.startswith("snapshot_file=")
+            )
             snapshot_path = Path(snapshot_line.split("=", 1)[1])
             assert snapshot_path.exists(), delete_audit["details"]
             assert "Second,127.0.0.2,bulk-check" in snapshot_path.read_text(encoding="utf-8-sig")

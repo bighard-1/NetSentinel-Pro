@@ -98,9 +98,11 @@ def rename_group(payload: GroupRename, _: None = Depends(verify_admin_token)) ->
                 session.delete(policy)
             else:
                 policy.group_name = new_name
-        routes = session.execute(
-            select(GroupNotificationRoute).where(GroupNotificationRoute.group_name == old_name)
-        ).scalars().all()
+        routes = (
+            session.execute(select(GroupNotificationRoute).where(GroupNotificationRoute.group_name == old_name))
+            .scalars()
+            .all()
+        )
         for route in routes:
             route.group_name = new_name
         session.commit()

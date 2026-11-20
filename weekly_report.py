@@ -40,8 +40,9 @@ async def run_weekly_report_and_cleanup() -> None:
 
     with SessionLocal() as session:
         setting = session.execute(select(SystemSetting).limit(1)).scalar_one_or_none()
-        already_sent = bool(setting and setting.weekly_report_last_sent_at and
-                            setting.weekly_report_last_sent_at >= since_utc)
+        already_sent = bool(
+            setting and setting.weekly_report_last_sent_at and setting.weekly_report_last_sent_at >= since_utc
+        )
         if already_sent:
             return
         total_alerts = session.execute(
@@ -63,37 +64,47 @@ async def run_weekly_report_and_cleanup() -> None:
         device_ids = session.execute(select(Device.id).where(Device.is_monitoring.is_(True))).scalars().all()
         event_rows = []
         if device_ids:
-            prior = select(
-                AlertLog.device_id.label("device_id"),
-                AlertLog.event_type.label("event_type"),
-                AlertLog.event_time.label("event_time"),
-                func.row_number().over(
-                    partition_by=AlertLog.device_id,
-                    order_by=(AlertLog.event_time.desc(), AlertLog.id.desc()),
-                ).label("rank"),
-            ).where(AlertLog.device_id.in_(device_ids), AlertLog.event_time < since_utc).subquery()
-            event_rows.extend(session.execute(
-                select(prior.c.device_id, prior.c.event_type, prior.c.event_time)
-                .where(prior.c.rank == 1)
-            ).all())
-            event_rows.extend(session.execute(
-                select(AlertLog.device_id, AlertLog.event_type, AlertLog.event_time)
-                .where(AlertLog.device_id.in_(device_ids),
-                       AlertLog.event_time >= since_utc, AlertLog.event_time <= now_utc)
-                .order_by(AlertLog.device_id, AlertLog.event_time, AlertLog.id)
-            ).all())
-        channels = session.execute(
-            select(NotificationChannel).where(NotificationChannel.enabled.is_(True))
-        ).scalars().all()
+            prior = (
+                select(
+                    AlertLog.device_id.label("device_id"),
+                    AlertLog.event_type.label("event_type"),
+                    AlertLog.event_time.label("event_time"),
+                    func.row_number()
+                    .over(
+                        partition_by=AlertLog.device_id,
+                        order_by=(AlertLog.event_time.desc(), AlertLog.id.desc()),
+                    )
+                    .label("rank"),
+                )
+                .where(AlertLog.device_id.in_(device_ids), AlertLog.event_time < since_utc)
+                .subquery()
+            )
+            event_rows.extend(
+                session.execute(
+                    select(prior.c.device_id, prior.c.event_type, prior.c.event_time).where(prior.c.rank == 1)
+                ).all()
+            )
+            event_rows.extend(
+                session.execute(
+                    select(AlertLog.device_id, AlertLog.event_type, AlertLog.event_time)
+                    .where(
+                        AlertLog.device_id.in_(device_ids),
+                        AlertLog.event_time >= since_utc,
+                        AlertLog.event_time <= now_utc,
+                    )
+                    .order_by(AlertLog.device_id, AlertLog.event_time, AlertLog.id)
+                ).all()
+            )
+        channels = (
+            session.execute(select(NotificationChannel).where(NotificationChannel.enabled.is_(True))).scalars().all()
+        )
         for channel in channels:
             session.expunge(channel)
             channel.endpoint = decrypt_secret(channel.endpoint)
             channel.extra_config = decrypt_secret(channel.extra_config)
 
     monitoring_device_count = len(device_ids)
-    uptime_percent, observed_seconds, offline_seconds = observed_uptime(
-        event_rows, device_ids, since_utc, now_utc
-    )
+    uptime_percent, observed_seconds, offline_seconds = observed_uptime(event_rows, device_ids, since_utc, now_utc)
 
     if top_offline_rows:
         top_lines = [
@@ -132,12 +143,21 @@ async def run_weekly_report_and_cleanup() -> None:
     if channels:
         sent_results = []
         for channel in channels:
-            sent_results.append(await _send_channel_payload(
-                channel, title="NetSentinel 每周稳定性周报", markdown=markdown,
-                raw={"kind": "WEEKLY_REPORT", "since": since_utc.isoformat(),
-                     "until": now_utc.isoformat(), "uptime_percent": uptime_percent},
-                event_kind="WEEKLY_REPORT", group_name="",
-            ))
+            sent_results.append(
+                await _send_channel_payload(
+                    channel,
+                    title="NetSentinel 每周稳定性周报",
+                    markdown=markdown,
+                    raw={
+                        "kind": "WEEKLY_REPORT",
+                        "since": since_utc.isoformat(),
+                        "until": now_utc.isoformat(),
+                        "uptime_percent": uptime_percent,
+                    },
+                    event_kind="WEEKLY_REPORT",
+                    group_name="",
+                )
+            )
         sent = any(sent_results)
     else:
         sent = await send_feishu_payload(payload, bypass_silence=True)

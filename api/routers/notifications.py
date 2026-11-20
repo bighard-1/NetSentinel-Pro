@@ -158,7 +158,9 @@ def update_notification_channel(
         if channel is None:
             raise HTTPException(status_code=404, detail="Notification channel not found")
         exists = session.execute(
-            select(NotificationChannel).where(NotificationChannel.name == payload.name, NotificationChannel.id != channel_id)
+            select(NotificationChannel).where(
+                NotificationChannel.name == payload.name, NotificationChannel.id != channel_id
+            )
         ).scalar_one_or_none()
         if exists is not None:
             raise HTTPException(status_code=400, detail="channel name already exists")
@@ -181,9 +183,11 @@ def delete_notification_channel(channel_id: int, _: None = Depends(verify_admin_
         if channel is None:
             raise HTTPException(status_code=404, detail="Notification channel not found")
         channel_name = channel.name
-        routes = session.execute(
-            select(GroupNotificationRoute).where(GroupNotificationRoute.channel_id == channel_id)
-        ).scalars().all()
+        routes = (
+            session.execute(select(GroupNotificationRoute).where(GroupNotificationRoute.channel_id == channel_id))
+            .scalars()
+            .all()
+        )
         for route in routes:
             session.delete(route)
         session.delete(channel)
@@ -249,9 +253,11 @@ def update_group_notification_route(
             ).scalar_one()
             if existing_count != len(unique_channel_ids):
                 raise HTTPException(status_code=400, detail="one or more channel_ids do not exist")
-        old_routes = session.execute(
-            select(GroupNotificationRoute).where(GroupNotificationRoute.group_name == normalized_group)
-        ).scalars().all()
+        old_routes = (
+            session.execute(select(GroupNotificationRoute).where(GroupNotificationRoute.group_name == normalized_group))
+            .scalars()
+            .all()
+        )
         for route in old_routes:
             session.delete(route)
         for channel_id in unique_channel_ids:
