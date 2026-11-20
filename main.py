@@ -33,6 +33,7 @@ from services.migrations import backup_before_upgrade, upgrade_schema
 from services.config import load_config
 from services.retention import cleanup_history
 from services.schema import ensure_default_setting
+from version import __version__
 import models  # noqa: F401 - Ensure model metadata is registered
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -155,7 +156,7 @@ async def lifespan(app: FastAPI):
 
 
 ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() == "true"
-app = FastAPI(title="NetSentinel Pro", lifespan=lifespan,
+app = FastAPI(title="NetSentinel Pro", version=__version__, lifespan=lifespan,
               docs_url="/docs" if ENABLE_DOCS else None,
               redoc_url="/redoc" if ENABLE_DOCS else None,
               openapi_url="/openapi.json" if ENABLE_DOCS else None)

@@ -357,4 +357,4 @@ docker run --rm --platform linux/amd64 netsentinel-pro:self-check python scripts
 
 ## License
 
-当前仓库未声明开源许可证。生产或二次分发前请先补充明确的许可证文件。
+本项目采用 [Apache License 2.0](LICENSE)。随项目分发的 Vue 运行时采用 MIT 许可证，见 [Vue 许可证](static/vendor/LICENSE.vue.txt)。
