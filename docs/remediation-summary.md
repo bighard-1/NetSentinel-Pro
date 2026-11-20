@@ -18,11 +18,12 @@
 
 ## 验证与性能
 
-- 最终本地回归：`python -m pytest -q --cov --cov-report=term --cov-report=json:coverage.json`；核心覆盖率门槛由 `scripts/check_core_coverage.py` 校验。`scripts/self_check.py` 验证登录、设备、探测、备份恢复和主要 API。
+- 最终本地回归：`python -m pytest -q --cov --cov-report=term --cov-report=json:coverage.json`，52 个测试通过；核心覆盖率门槛由 `scripts/check_core_coverage.py` 校验，状态机 100%、告警 82.0%、认证 85.7%、历史清理 100%。`scripts/self_check.py` 验证登录、设备、探测、备份恢复和主要 API。
 - 隔离 60 天加速场景每周执行历史清理，缩短保留窗口，模拟在线、离线、恢复；设备状态始终存在，最终为在线。
 - 安全场景遍历旧版和新版 `/api/*` 路由的未授权访问，验证 401；旧版数据库升级场景验证状态与数据保留。另有锁库恢复、探测失败重试、自监控引擎停止注入、告警渠道模拟和恢复演练。
 - 1000 目标模拟探测：完成 1000 次、确认在线 1000 台，单轮墙钟 0.851 秒、引擎耗时 0.760 秒、SQLite 主库和 WAL 合计 5,234,480 字节、峰值 RSS 126,369,792 字节。详见 [P6 压测](benchmarks/p6-1000-devices.md)。这不是实际网络或持续 60 天的负载测试。
 - P4 浏览器检查：登录入口 Lighthouse 可访问性 100/100，已登录主要视图 axe-core 零 WCAG 违规；详见 [界面验收](qa/p4-ui-accessibility.md)。
+- 在外挂盘新建 Python 3.12 虚拟环境，按 `requirements.lock` 的哈希锁定依赖完成安装，再运行 `scripts/self_check.py` 通过；本次本机安装加自检在五分钟内完成。该检查仍不能代替另一台机器或容器的部署验收。
 
 ## 安全检查
 
@@ -32,7 +33,7 @@
 | 统一错误不回显输入、写操作审计、通用 API 限流 | 已验证 | P5 API 合同测试；限流桶位于单进程内存 |
 | 通知密钥加密与返回脱敏、出站地址校验 | 已验证 | 旧库迁移与 Webhook 测试；需妥善保存 `APP_SECRET` |
 | CSV 公式注入与恢复文件校验 | 已验证 | P2 安全场景、自检与恢复演练 |
-| 依赖漏洞、静态安全与代码质量 | 本地通过 | `pip-audit`、Bandit、Ruff、mypy、actionlint；远端 CI 尚未运行 |
+| 依赖漏洞、静态安全与代码质量 | 本地通过 | `pip-audit` 未发现已知漏洞；Bandit、Ruff、mypy、actionlint 通过；远端 CI 尚未运行 |
 | 非 root 容器、只读根文件系统与镜像扫描 | 配置已提交 | 本机未运行 Docker，也未取得远端镜像扫描结果 |
 | Prometheus 鉴权、外部心跳 HTTPS 校验 | 已验证 | P6 隔离测试；真实 Prometheus 与外部心跳服务尚未联调 |
 
@@ -45,10 +46,10 @@
 
 ## 风险与遗留
 
-- 本地验证通过；分支尚未推送，远端 GitHub Actions、amd64/arm64 镜像构建与 Trivy 扫描、GHCR 发布及干净机器五分钟部署尚无运行结果。
+- 本地验证通过；尝试推送分支时 GitHub 拒绝了本机 Git 凭据（`Invalid username or token`），因此分支尚未推送，远端 GitHub Actions、amd64/arm64 镜像构建与 Trivy 扫描、GHCR 发布尚无运行结果。外挂盘全新虚拟环境的安装与自检已通过，另一台干净机器或容器仍待验证。
 - P4 双语覆盖主要监控界面；系统设置和部分反馈仍为中文。已登录页面没有 Lighthouse 评分，人工键盘与屏幕阅读器验收仍需完成。
 - 1000 目标测试使用立即成功的 mock。真实网络延迟、长时间高负载、通知服务故障与备份盘容量需要在实际部署环境持续观察。
 - 自监控故障注入验证了调度和发送调用；真实通知渠道到达性、外部死人开关的宕机超时告警需用生产配置演练。没有通知渠道时，自监控只能写日志。
 - API 限流及探测计数器为单进程内存状态。部署仍需单 worker；系统日志按当前保留策略清理，若审计需长期留存，应配置额外归档。
 
-下一步是审核本分支差异，在外挂盘或远端 CI 环境完成部署与镜像验收，再按发布流程推送分支及 `v0.6.0` 标签。
+下一步是更新本机 GitHub Git 凭据，推送 `codex/p6-observability` 分支并查看 GitHub Actions；远端检查通过后再审核合并及 `v0.6.0` 发布标签。不要在检查结果未知时直接给 `main` 打标签。
