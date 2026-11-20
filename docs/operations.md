@@ -11,6 +11,7 @@
 - Prometheus 抓取 `GET /metrics` 须提供 `Authorization: Bearer <METRICS_TOKEN>`，或使用管理员登录令牌。返回 Prometheus 0.0.4 文本，计数器在进程重启后归零；通知结果指标是当前保留窗口内的记录数。勿把抓取令牌放在查询字符串里。
 - 自监控任务每 10 秒检查探测引擎任务与心跳、数据库容量和启用渠道的连续投递失败。首次发现问题会写入 `self_monitor` 日志，并向所有启用通知渠道发送系统告警；若没有渠道，则尝试全局飞书 Webhook。无通知配置时只能在日志中看到告警。恢复后写入恢复记录。
 - 可配置 `HEALTHCHECK_PING_URL` 为外部心跳服务提供的 HTTPS 地址；系统按 `HEALTHCHECK_PING_INTERVAL_SECONDS` 发起 GET。须在外部服务上配置超时告警，以便本进程宕机后仍能收到通知。地址需通过公开地址校验，日志不记录完整地址。
+- 每日 UTC 03:00 创建 `data/backups/monitor-auto-*.db` 在线备份，保留最近 `BACKUP_RETENTION_COUNT` 份；可用 `AUTO_BACKUP_ENABLED=false` 关闭。启动时及每日 UTC 03:05 将数据库主库加 WAL 大小和各表行数写入 `capacity` 系统日志；越过 `DATABASE_SIZE_ALERT_BYTES` 会另写警告。
 - 每次升级后执行 `python scripts/self_check.py`，并检查通知渠道测试发送的投递记录。
 
 ## 容量规划
@@ -27,6 +28,14 @@
 2. 停止旧服务，部署新代码后启动。应用版本或数据库迁移版本有变化时，启动流程会在 `data/backups/` 生成 `monitor-pre-upgrade-*.db` 并验证完整性，然后执行 Alembic 迁移。`data/.app-version` 记录上次成功启动的应用版本；升级前备份按 `BACKUP_RETENTION_COUNT` 保留最近 N 份。
 3. 检查 `/health/ready`、认证后的 `/api/version`（`migration_status` 应为 `current`）、设备状态、通知渠道和 `scripts/self_check.py`。失败时停止新服务，保留现场库，复制最近的 `monitor-pre-upgrade-*.db` 回 `data/monitor.db`，恢复属主与权限，并恢复旧代码及对应的 `data/.app-version`，再启动旧代码。
 4. 上传数据库恢复前会另建 `monitor-pre-restore-*.db`；自动恢复失败时用此文件按同样方式回滚。恢复文件须是完整的 NetSentinel SQLite 库，且不得超过 `MAX_RESTORE_BYTES`。
+
+在服务仍运行时，可用 SQLite 在线备份 API 对当前库进行隔离恢复演练：
+
+```bash
+python scripts/restore_drill.py --source data/monitor.db
+```
+
+脚本在仓库所在盘创建临时目录，快照源库、运行迁移、检查完整性和设备行数，然后删除临时目录；源数据库保持不变。也可把 `--source` 指向 `data/backups/monitor-auto-*.db` 中的一份备份。
 
 复制数据库时先停止服务，避免 WAL 中仍有未检查点的数据。正常下载备份使用 SQLite 在线备份 API，包含已提交的 WAL 数据。恢复演练应在隔离环境进行，并验证设备数、状态与迁移版本。
 

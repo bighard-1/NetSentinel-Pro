@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -12,6 +14,7 @@ import alert
 from database import SessionLocal
 from models import NotificationChannel, NotificationChannelType, NotificationDelivery, SystemLog
 from services.config import load_config
+from services.operations import record_capacity_snapshot, run_automatic_backup
 import services.self_monitor as self_monitor_module
 
 from main import app
@@ -49,6 +52,8 @@ def logging_contract() -> None:
         assert "netsentinel_database_size_bytes" in metrics.text
         assert client.get("/metrics", headers=headers).status_code == 200
         assert app.state.scheduler.get_job("self_monitor") is not None
+        assert app.state.scheduler.get_job("daily_online_backup") is not None
+        assert app.state.scheduler.get_job("daily_capacity_snapshot") is not None
 
         delivered_alerts: list[str] = []
 
@@ -153,6 +158,31 @@ def logging_contract() -> None:
     assert any(item["request_id"] == request_id and "新增设备" in item["message"] for item in logs)
     assert any(item["device_id"] == device_id and "新增设备" in item["message"] for item in logs)
     assert all("p6-test-pass" not in json.dumps(item) for item in logs)
+    with SessionLocal() as session:
+        assert session.query(SystemLog).filter_by(category="capacity").count() >= 1
+    snapshot = record_capacity_snapshot()
+    assert snapshot["tables"]["devices"] == 1
+    config = load_config()
+    config.backup_retention_count = 2
+    backups = [Path(run_automatic_backup()) for _ in range(3)]
+    assert all(backup.exists() for backup in backups[1:])
+    assert not backups[0].exists()
+    assert len(list(Path("data/backups").glob("monitor-auto-*.db"))) == 2
+
+    drill = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "scripts/restore_drill.py"),
+            "--source",
+            str(backups[-1]),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    assert drill.returncode == 0, drill.stdout + drill.stderr
+    report = json.loads(drill.stdout)
+    assert report["status"] == "passed" and report["device_count"] == 1
 
 
 if __name__ == "__main__":

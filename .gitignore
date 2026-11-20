@@ -14,6 +14,7 @@ coverage.json
 .test-p4-*/
 .test-p5-*/
 .test-p6-*/
+.restore-drill-*/
 .bench-p1-*/
 .env
 data/*.db

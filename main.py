@@ -49,6 +49,7 @@ from services.migrations import (
     verify_and_record_upgrade,
 )
 from services.metrics import render_metrics
+from services.operations import record_capacity_snapshot, run_automatic_backup
 from services.self_monitor import SelfMonitor
 from services.config import load_config
 from services.retention import cleanup_history
@@ -164,6 +165,7 @@ async def lifespan(app: FastAPI):
     upgrade_schema()
     ensure_default_setting()
     verify_and_record_upgrade()
+    await asyncio.to_thread(record_capacity_snapshot)
     if backup_path is not None:
         log_event(category="backup", message=f"升级前数据库备份已创建: {backup_path}")
     log_event(category="system", message="NetSentinel 服务启动")
@@ -187,6 +189,23 @@ async def lifespan(app: FastAPI):
         cleanup_history,
         trigger=CronTrigger(hour=2, minute=30, timezone="UTC"),
         id="daily_retention_cleanup",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    if config.auto_backup_enabled:
+        app.state.scheduler.add_job(
+            run_automatic_backup,
+            trigger=CronTrigger(hour=config.auto_backup_hour_utc, minute=0, timezone="UTC"),
+            id="daily_online_backup",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+    app.state.scheduler.add_job(
+        record_capacity_snapshot,
+        trigger=CronTrigger(hour=3, minute=5, timezone="UTC"),
+        id="daily_capacity_snapshot",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
