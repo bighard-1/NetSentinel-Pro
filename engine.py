@@ -104,7 +104,7 @@ async def ping(ip_address: str, timeout_seconds: int = 2) -> ProbeResult:
     started_at = time.perf_counter()
     try:
         process = await asyncio.create_subprocess_exec(
-            "ping", count_flag, "1", timeout_flag, timeout_value, ip_address,
+            "ping", count_flag, "1", timeout_flag, timeout_value, "--", ip_address,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
     except (FileNotFoundError, PermissionError) as exc:

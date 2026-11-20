@@ -75,6 +75,7 @@ def main() -> int:
                 assert not list(DB_DIR.glob("monitor-backup-*.db"))
                 live_db.execute("DROP TABLE backup_probe")
                 live_db.commit()
+            downloaded_path.write_bytes(client.get("/api/backup", headers=headers).content)
 
             invalid_backup = client.post(
                 "/api/restore",
@@ -84,7 +85,7 @@ def main() -> int:
             assert invalid_backup.status_code == 400, invalid_backup.text
             assert not list(DB_DIR.glob("monitor-restore-*.tmp"))
 
-            devices = client.get("/api/devices")
+            devices = client.get("/api/devices", headers=headers)
             assert devices.status_code == 200, devices.text
             assert len(devices.json()) == 1
 
@@ -194,7 +195,7 @@ def main() -> int:
             assert routes.status_code == 200, routes.text
             assert routes.json()[0]["group_name"] == "self-check"
 
-            summary = client.get("/api/summary")
+            summary = client.get("/api/summary", headers=headers)
             assert summary.status_code == 200, summary.text
             assert summary.json()["total_devices"] == 1
 
@@ -251,7 +252,7 @@ def main() -> int:
             )
             assert bulk_update.status_code == 200, bulk_update.text
             assert bulk_update.json()["updated"] == 2
-            bulk_rows = client.get("/api/devices")
+            bulk_rows = client.get("/api/devices", headers=headers)
             assert bulk_rows.status_code == 200, bulk_rows.text
             by_id = {row["id"]: row for row in bulk_rows.json()}
             assert by_id[1]["group_name"] == "bulk-check"
@@ -269,7 +270,7 @@ def main() -> int:
             assert stopped.json()["is_monitoring"] is False
             assert "保留在监控墙" in stopped.json()["status_description"]
 
-            still_listed = client.get("/api/devices")
+            still_listed = client.get("/api/devices", headers=headers)
             assert still_listed.status_code == 200, still_listed.text
             assert len(still_listed.json()) == 2
             assert {row["id"]: row for row in still_listed.json()}[1]["monitoring_state"] == "STOPPED"
@@ -320,7 +321,7 @@ def main() -> int:
             assert alerts.status_code == 200, alerts.text
             assert isinstance(alerts.json(), list)
 
-            risk_devices = client.get("/api/risk-devices")
+            risk_devices = client.get("/api/risk-devices", headers=headers)
             assert risk_devices.status_code == 200, risk_devices.text
             assert isinstance(risk_devices.json(), list)
 
@@ -340,7 +341,7 @@ def main() -> int:
                 json={"device_ids": [1, second_id], "confirmation": "1"},
             )
             assert rejected_bulk_delete.status_code == 400, rejected_bulk_delete.text
-            still_after_reject = client.get("/api/devices")
+            still_after_reject = client.get("/api/devices", headers=headers)
             assert still_after_reject.status_code == 200, still_after_reject.text
             assert len(still_after_reject.json()) == 2
 
@@ -397,7 +398,7 @@ def main() -> int:
             assert partial_restore.status_code == 200, partial_restore.text
             assert partial_restore.json()["restored"] == 1
             assert partial_restore.json()["skipped"] == 0
-            restored_rows = client.get("/api/devices")
+            restored_rows = client.get("/api/devices", headers=headers)
             assert restored_rows.status_code == 200, restored_rows.text
             assert len(restored_rows.json()) == 1
             restored_device = restored_rows.json()[0]
@@ -430,7 +431,7 @@ def main() -> int:
 
             cleanup_restored = client.delete(f"/api/devices/{restored_device['id']}", headers=headers)
             assert cleanup_restored.status_code == 200, cleanup_restored.text
-            after_delete = client.get("/api/devices")
+            after_delete = client.get("/api/devices", headers=headers)
             assert after_delete.status_code == 200, after_delete.text
             assert after_delete.json() == []
 
@@ -473,7 +474,7 @@ def main() -> int:
             )
             assert restored_backup.status_code == 200, restored_backup.text
             assert not list(DB_DIR.glob("monitor-restore-*.tmp"))
-            devices_after_restore = client.get("/api/devices")
+            devices_after_restore = client.get("/api/devices", headers=headers)
             assert devices_after_restore.status_code == 200, devices_after_restore.text
             assert [row["name"] for row in devices_after_restore.json()] == ["Localhost"]
 

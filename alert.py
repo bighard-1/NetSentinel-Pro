@@ -21,6 +21,8 @@ from models import (
     NotificationDelivery,
     SystemSetting,
 )
+from services.secrets import decrypt_secret
+from services.webhook_security import validate_webhook_url
 
 FEISHU_WEBHOOK_ENV = "FEISHU_WEBHOOK"
 ALERT_BATCH_INTERVAL_SECONDS = max(1, int(os.getenv("ALERT_BATCH_INTERVAL_SECONDS", "5")))
@@ -59,14 +61,14 @@ def _load_notification_policy(group_name: str | None = None) -> tuple[str, bool,
     silence_end = ""
 
     if setting:
-        webhook = (setting.feishu_webhook or "").strip()
+        webhook = decrypt_secret(setting.feishu_webhook).strip()
         silence_enabled = bool(setting.silence_enabled)
         silence_start = setting.silence_start or ""
         silence_end = setting.silence_end or ""
 
     if policy:
         if policy.feishu_webhook and policy.feishu_webhook.strip():
-            webhook = policy.feishu_webhook.strip()
+            webhook = decrypt_secret(policy.feishu_webhook).strip()
         silence_enabled = bool(policy.silence_enabled)
         silence_start = policy.silence_start or ""
         silence_end = policy.silence_end or ""
@@ -94,6 +96,10 @@ def _load_group_channels(group_name: str) -> tuple[bool, list[NotificationChanne
             .where(NotificationChannel.id.in_(channel_ids), NotificationChannel.enabled.is_(True))
             .order_by(NotificationChannel.id.asc())
         ).scalars().all()
+        for channel in channels:
+            session.expunge(channel)
+            channel.endpoint = decrypt_secret(channel.endpoint)
+            channel.extra_config = decrypt_secret(channel.extra_config)
         return True, channels
 
 
@@ -214,6 +220,7 @@ def _summary_markdown(events: list[AlertEvent], group_name: str) -> str:
 
 
 async def _post_json(endpoint: str, payload: dict) -> DeliveryResult:
+    await asyncio.to_thread(validate_webhook_url, endpoint)
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.post(endpoint, json=payload)
     excerpt = response.text[:1000]
@@ -313,6 +320,8 @@ async def send_test_notification(channel_id: int) -> bool:
         if not channel.enabled:
             raise ValueError("Notification channel is disabled")
         session.expunge(channel)
+        channel.endpoint = decrypt_secret(channel.endpoint)
+        channel.extra_config = decrypt_secret(channel.extra_config)
 
     now_text = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
     title = "NetSentinel 测试通知"
@@ -454,6 +463,7 @@ async def send_feishu_payload(payload: dict, *, bypass_silence: bool = False, gr
         log_event(category="alert", message="当前处于告警静默窗口，飞书通知已抑制")
         return False
     try:
+        await asyncio.to_thread(validate_webhook_url, webhook)
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(webhook, json=payload)
         if response.status_code != 200:
@@ -539,6 +549,8 @@ async def _dispatch_outbox_item(item: AlertOutbox) -> None:
                 channel = session.get(NotificationChannel, target)
                 if channel is not None:
                     session.expunge(channel)
+                    channel.endpoint = decrypt_secret(channel.endpoint)
+                    channel.extra_config = decrypt_secret(channel.extra_config)
             if channel is None or not channel.enabled:
                 await asyncio.to_thread(_update_outbox, item.id, delivered_id=target)
                 delivered.add(target)
@@ -595,6 +607,8 @@ async def _dispatch_outbox_summary(items: list[AlertOutbox]) -> None:
                 channel = session.get(NotificationChannel, target)
                 if channel is not None:
                     session.expunge(channel)
+                    channel.endpoint = decrypt_secret(channel.endpoint)
+                    channel.extra_config = decrypt_secret(channel.extra_config)
             if channel is None or not channel.enabled:
                 success = True
             else:

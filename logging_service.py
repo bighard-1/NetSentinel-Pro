@@ -5,10 +5,18 @@ from datetime import datetime, timezone
 
 from database import SessionLocal
 from models import SystemLog
+from services.redaction import redact_text
 
 
 logger = logging.getLogger("netsentinel")
 MAX_LOG_DETAILS_CHARS = 100_000
+
+
+class SecretRedactionFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redact_text(record.getMessage())
+        record.args = ()
+        return True
 
 
 def configure_logging() -> None:
@@ -16,6 +24,9 @@ def configure_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+    for handler in logging.getLogger().handlers:
+        if not any(isinstance(item, SecretRedactionFilter) for item in handler.filters):
+            handler.addFilter(SecretRedactionFilter())
 
 
 def log_event(
@@ -34,9 +45,9 @@ def log_event(
                 SystemLog(
                     level=level,
                     category=category[:50],
-                    message=message[:500],
+                    message=redact_text(message)[:500],
                     device_id=device_id,
-                    details=details[:MAX_LOG_DETAILS_CHARS],
+                    details=(details if category == "asset" else redact_text(details))[:MAX_LOG_DETAILS_CHARS],
                     created_at=datetime.now(timezone.utc),
                 )
             )

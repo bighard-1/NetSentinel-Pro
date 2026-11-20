@@ -59,7 +59,7 @@ def run(scenario: str) -> None:
         triggered = client.post("/api/trigger-monitor", headers=headers)
         assert triggered.status_code == 200, triggered.text
         wait_for_probe(client, 1)
-        assert client.get("/api/devices").json()[0]["latest_status"] == "ONLINE"
+        assert client.get("/api/devices", headers=headers).json()[0]["latest_status"] == "ONLINE"
 
         with SessionLocal() as session:
             if scenario == "retention":
@@ -81,7 +81,7 @@ def run(scenario: str) -> None:
         triggered = client.post("/api/trigger-monitor", headers=headers)
         assert triggered.status_code == 200, triggered.text
         wait_for_probe(client, 2)
-        assert client.get("/api/devices").json()[0]["latest_status"] == "ONLINE"
+        assert client.get("/api/devices", headers=headers).json()[0]["latest_status"] == "ONLINE"
 
 
 def run_legacy_migration() -> None:
@@ -110,7 +110,9 @@ def run_legacy_migration() -> None:
         connection.commit()
 
     with TestClient(app) as client:
-        devices = client.get("/api/devices")
+        login = client.post("/api/auth/login", json={"username": "p0-test", "password": "p0-test-pass"})
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        devices = client.get("/api/devices", headers=headers)
         assert devices.status_code == 200, devices.text
         assert devices.json()[0]["latest_status"] == "ONLINE"
         assert devices.json()[0]["latest_probe_time"] is not None

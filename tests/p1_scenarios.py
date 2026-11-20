@@ -112,7 +112,7 @@ def restore_rollback() -> None:
                              files={"file": ("monitor.db", original_backup, "application/octet-stream")})
         assert result.status_code == 500, result.text
         assert calls == 2
-        devices = client.get("/api/devices").json()
+        devices = client.get("/api/devices", headers=headers).json()
         assert {device["name"] for device in devices} == {"Before", "Keep"}
         assert client.get("/health/ready").status_code == 200
 

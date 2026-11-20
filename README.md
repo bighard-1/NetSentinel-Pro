@@ -164,6 +164,35 @@ data/audit/
 data/backups/
 ```
 
+## 部署安全
+
+生产环境必须设置随机生成的 `APP_SECRET`、强 `ADMIN_PASS`，并通过 HTTPS 反向代理访问。Compose 仅将 8000 端口绑定到宿主机回环地址。服务仅支持 **单 worker**；多个 worker 会重复执行探测和定时任务。只读 viewer 可选配置 `VIEWER_USER`、`VIEWER_PASS`。前端令牌保存在当前标签页的 `sessionStorage`，退出时服务端会吊销令牌。`APP_ENV=production` 未配置 `APP_SECRET` 时拒绝启动；`ENABLE_DOCS=true` 可在可信开发环境启用 API 文档。
+
+Caddy 示例：
+
+```caddyfile
+monitor.example.com {
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Forwarded-For {remote_host}
+    }
+}
+```
+
+Nginx 示例（需另行配置 TLS 证书）：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+仅在明确知道代理来源地址时设置 `TRUSTED_PROXIES`（逗号分隔 IP）。服务默认忽略客户端直接发送的 `X-Forwarded-For`。`ENABLE_HSTS=true` 可在已启用 HTTPS 的代理后添加 HSTS。Webhook 默认只接受 HTTPS 且不能解析为内网、回环或保留地址；确需内网通知时显式设置 `ALLOW_PRIVATE_WEBHOOK=true`。通知密钥在数据库中加密；生产环境应备份 `APP_SECRET`，丢失后无法解密既有通知配置。
+
+镜像以 UID 10001 运行，挂载的 `data/` 必须对该 UID 可写。Compose 根文件系统只读，只给 `data/` 写权限和 ICMP 所需的 `NET_RAW` 能力。构建镜像前请检查 Docker 数据根目录的剩余空间与所在磁盘。
+
 启动时会检查数据库迁移版本。需要升级旧库时，系统先在 `data/backups/` 创建通过完整性检查的在线备份，然后应用 Alembic 迁移。若迁移失败，应停止服务、保留原库与升级前备份，再从备份恢复。`GET /health/ready` 会检查后台任务、监控心跳与数据库连接；容器健康检查使用此接口。
 
 恢复上传时系统会先暂停后台监控与通知，备份当前库，验证上传库，再原子替换并迁移；恢复失败会用恢复前备份回滚。状态事件与待发送告警在同一事务提交；通知逐渠道记录成功结果，失败按指数退避最多尝试 5 次，超出后标记为 `DEAD` 以供排查。`ALERT_BATCH_INTERVAL_SECONDS` 控制告警汇总窗口，单组离线事件达到 `ALERT_STORM_THRESHOLD` 后发送合并通知。
@@ -184,13 +213,13 @@ docker tag netsentinel-pro:latest ghcr.io/bighard-1/netsentinel-pro:latest
 
 ## 本地开发
 
-需要 Python 3.10 或更新版本。虚拟环境和项目数据会保存在当前项目目录中。
+需要 Python 3.12 或更新版本。虚拟环境和项目数据会保存在当前项目目录中。
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-ADMIN_USER=admin ADMIN_PASS=change-me uvicorn main:app --reload
+pip install --require-hashes -r requirements.lock
+ADMIN_USER=admin ADMIN_PASS=change-me uvicorn main:app --reload --no-proxy-headers
 ```
 
 ## 项目自检

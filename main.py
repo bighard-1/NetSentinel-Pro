@@ -1,5 +1,7 @@
 import asyncio
+import ipaddress
 import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -8,7 +10,7 @@ from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -20,10 +22,11 @@ from api.routers.events import router as events_router
 from api.routers.groups import router as groups_router
 from api.routers.notifications import router as notifications_router
 from api.routers.settings import router as settings_router
-from auth import create_admin_token, is_admin_configured, verify_admin_credentials
+from auth import (create_admin_token, credential_role, is_admin_configured,
+                  revoke_token_value, verify_admin_token_value, weak_admin_password)
 from database import Base, engine
 from engine import close_http_client, monitor_health, monitor_loop, shutdown_monitor_task, start_http_client
-from logging_service import configure_logging, log_event
+from logging_service import configure_logging, log_event, logger
 from services.report_scheduler import schedule_weekly_report_job
 from services.migrations import backup_before_upgrade, upgrade_schema
 from services.retention import cleanup_history
@@ -34,6 +37,9 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 LOGIN_WINDOW_SECONDS = int(os.getenv("LOGIN_WINDOW_SECONDS", "300"))
 LOGIN_MAX_FAILURES = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
+LOGIN_MAX_BUCKETS = max(100, int(os.getenv("LOGIN_MAX_BUCKETS", "10000")))
+MAX_BULK_IMPORT_BYTES = max(1024, int(os.getenv("MAX_BULK_IMPORT_BYTES", str(1024 * 1024))))
+TRUSTED_PROXIES = {item.strip() for item in os.getenv("TRUSTED_PROXIES", "").split(",") if item.strip()}
 
 _login_failures: dict[str, list[float]] = {}
 
@@ -46,18 +52,31 @@ class LoginRequest(BaseModel):
 class LoginOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    role: str = "admin"
 
 
 def _client_key(request: Request) -> str:
-    # Trusted proxy headers are resolved by the ASGI server. The raw header
-    # can be forged by a client and must not create a new rate-limit bucket.
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else "unknown"
+    if peer not in TRUSTED_PROXIES:
+        return peer
+    forwarded = request.headers.get("x-forwarded-for", "")
+    for address in reversed([part.strip() for part in forwarded.split(",") if part.strip()]):
+        try:
+            ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if address not in TRUSTED_PROXIES:
+            return address
+    return peer
 
 
 def _is_login_limited(key: str) -> bool:
     now = time.time()
     failures = [ts for ts in _login_failures.get(key, []) if now - ts < LOGIN_WINDOW_SECONDS]
-    _login_failures[key] = failures
+    if failures:
+        _login_failures[key] = failures
+    else:
+        _login_failures.pop(key, None)
     return len(failures) >= LOGIN_MAX_FAILURES
 
 
@@ -66,6 +85,13 @@ def _record_login_failure(key: str) -> None:
     failures = [ts for ts in _login_failures.get(key, []) if now - ts < LOGIN_WINDOW_SECONDS]
     failures.append(now)
     _login_failures[key] = failures
+    if len(_login_failures) > LOGIN_MAX_BUCKETS:
+        expired = [name for name, timestamps in _login_failures.items()
+                   if not timestamps or now - timestamps[-1] >= LOGIN_WINDOW_SECONDS]
+        for name in expired:
+            _login_failures.pop(name, None)
+        while len(_login_failures) > LOGIN_MAX_BUCKETS:
+            _login_failures.pop(next(iter(_login_failures)))
 
 
 def _clear_login_failures(key: str) -> None:
@@ -75,6 +101,10 @@ def _clear_login_failures(key: str) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
+    if os.getenv("APP_ENV", "development").lower() == "production" and not os.getenv("APP_SECRET", "").strip():
+        raise RuntimeError("APP_SECRET must be set in production")
+    if weak_admin_password():
+        logger.warning("Administrator password is weak; change ADMIN_PASS")
     backup_path = backup_before_upgrade()
     Base.metadata.create_all(bind=engine)
     ensure_schema_columns()
@@ -120,7 +150,11 @@ async def lifespan(app: FastAPI):
     await close_http_client()
 
 
-app = FastAPI(title="NetSentinel Pro", lifespan=lifespan)
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "false").lower() == "true"
+app = FastAPI(title="NetSentinel Pro", lifespan=lifespan,
+              docs_url="/docs" if ENABLE_DOCS else None,
+              redoc_url="/redoc" if ENABLE_DOCS else None,
+              openapi_url="/openapi.json" if ENABLE_DOCS else None)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(backup_router)
 app.include_router(dashboard_router)
@@ -133,17 +167,50 @@ app.include_router(settings_router)
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path != "/api/auth/login":
+        authorization = request.headers.get("authorization", "")
+        token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else ""
+        payload = verify_admin_token_value(token) if token else None
+        if payload is None:
+            return JSONResponse(status_code=401, content={"detail": "Missing or invalid bearer token"},
+                                headers={"Cache-Control": "no-store"})
+        if payload["scope"] == "viewer" and request.method not in {"GET", "HEAD", "OPTIONS"} and path != "/api/auth/logout":
+            return JSONResponse(status_code=403, content={"detail": "Viewer account is read only"},
+                                headers={"Cache-Control": "no-store"})
+    if path == "/api/devices/bulk" and request.method == "POST":
+        if "content-length" not in request.headers:
+            return JSONResponse(status_code=411, content={"detail": "Content-Length is required"})
+        try:
+            length = int(request.headers["content-length"])
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+        if length > MAX_BULK_IMPORT_BYTES:
+            return JSONResponse(status_code=413, content={"detail": "Bulk import is too large"})
     response: Response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    if path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    if os.getenv("ENABLE_HSTS", "false").lower() == "true":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
 
 @app.get("/", include_in_schema=False)
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+def index() -> HTMLResponse:
+    nonce = secrets.token_urlsafe(16)
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    html = html.replace("<script>", f'<script nonce="{nonce}">').replace("<style>", f'<style nonce="{nonce}">')
+    response = HTMLResponse(html)
+    response.headers["Content-Security-Policy"] = (
+        f"default-src 'self'; script-src 'self' 'nonce-{nonce}' 'unsafe-eval' https://unpkg.com; "
+        f"style-src 'self' 'nonce-{nonce}'; connect-src 'self'; img-src 'self' data:; "
+        "font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    )
+    return response
 
 
 @app.get("/health", tags=["System"])
@@ -183,13 +250,34 @@ def login(payload: LoginRequest, request: Request) -> LoginOut:
     if not is_admin_configured():
         raise HTTPException(status_code=500, detail="ADMIN_USER/ADMIN_PASS not configured")
     login_key = _client_key(request)
-    if _is_login_limited(login_key):
+    username_key = f"user:{payload.username.casefold()}"
+    ip_key = f"ip:{login_key}"
+    if _is_login_limited(ip_key) or _is_login_limited(username_key):
+        time.sleep(0.15)
         log_event(category="auth", message=f"管理员登录被限流: {payload.username}", level="WARNING")
-        raise HTTPException(status_code=429, detail="登录失败次数过多，请稍后再试")
-    if not verify_admin_credentials(payload.username, payload.password):
-        _record_login_failure(login_key)
+        raise HTTPException(status_code=429, detail="登录失败次数过多，请稍后再试", headers={"Retry-After": str(LOGIN_WINDOW_SECONDS)})
+    role = credential_role(payload.username, payload.password)
+    if role is None:
+        time.sleep(0.15)
+        _record_login_failure(ip_key)
+        _record_login_failure(username_key)
         log_event(category="auth", message=f"管理员登录失败: {payload.username}", level="WARNING")
         raise HTTPException(status_code=401, detail="管理员凭证错误")
-    _clear_login_failures(login_key)
+    _clear_login_failures(ip_key)
+    _clear_login_failures(username_key)
     log_event(category="auth", message=f"管理员登录成功: {payload.username}")
-    return LoginOut(access_token=create_admin_token(payload.username))
+    return LoginOut(access_token=create_admin_token(payload.username, role), role=role)
+
+
+@app.post("/api/auth/logout", tags=["Auth"])
+def logout(request: Request) -> dict[str, str]:
+    token = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if not revoke_token_value(token):
+        raise HTTPException(status_code=401, detail="Invalid token")
+    log_event(category="auth", message="用户已退出登录")
+    return {"status": "success"}
+
+
+@app.get("/api/security-status", tags=["System"])
+def security_status() -> dict[str, bool]:
+    return {"weak_admin_password": weak_admin_password()}

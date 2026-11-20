@@ -1,6 +1,11 @@
 .git
 .github
 .venv
+.pytest_cache
+.test-p0-*
+.test-p1-*
+.test-p2-*
+.bench-p1-*
 __pycache__
 *.pyc
 data

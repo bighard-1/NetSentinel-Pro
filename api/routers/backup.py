@@ -10,9 +10,10 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from api.dependencies import verify_admin_token
+from api.dependencies import current_admin_subject, verify_admin_token
 from database import DB_DIR, engine
 from database import Base
+import models  # noqa: F401 - Register the allowed SQLite tables
 from engine import monitor_loop
 from alert import alert_dispatch_loop
 from logging_service import log_event, logger
@@ -27,22 +28,29 @@ MAX_RESTORE_BYTES = int(os.getenv("MAX_RESTORE_BYTES", str(50 * 1024 * 1024)))
 
 def _validate_sqlite_backup(path: Path) -> None:
     try:
+        with path.open("rb") as uploaded:
+            if uploaded.read(16) != b"SQLite format 3\x00":
+                raise ValueError("SQLite file header is invalid")
         with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
             result = conn.execute("PRAGMA integrity_check").fetchone()
             if not result or result[0] != "ok":
                 raise ValueError("SQLite integrity check failed")
-            tables = {
-                row[0]
-                for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-            }
+            schema_rows = list(conn.execute("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"))
+            if any(kind in {"trigger", "view"} or (sql and "ATTACH" in sql.upper())
+                   for kind, _name, sql in schema_rows):
+                raise ValueError("Backup contains unsupported schema objects")
+            tables = {name for kind, name, _sql in schema_rows if kind == "table"}
             if not {"devices", "alert_logs", "system_settings"}.issubset(tables):
                 raise ValueError("Required NetSentinel tables are missing")
+            allowed_tables = set(Base.metadata.tables) | {"alembic_version"}
+            if not tables.issubset(allowed_tables):
+                raise ValueError("Backup contains unknown tables")
     except Exception as exc:
         raise HTTPException(status_code=400, detail="数据库备份文件无效") from exc
 
 
 @router.get("/backup")
-def download_backup(_: None = Depends(verify_admin_token)) -> FileResponse:
+def download_backup(request: Request, operator: str = Depends(current_admin_subject)) -> FileResponse:
     if not DB_FILE.exists():
         raise HTTPException(status_code=404, detail="Database file not found")
     with tempfile.NamedTemporaryFile(prefix="monitor-backup-", suffix=".db", dir=DB_DIR, delete=False) as temp:
@@ -54,7 +62,8 @@ def download_backup(_: None = Depends(verify_admin_token)) -> FileResponse:
     except Exception:
         snapshot_path.unlink(missing_ok=True)
         raise
-    log_event(category="backup", message="管理员下载数据库备份")
+    log_event(category="backup", message="管理员下载数据库备份",
+              details=f"operator={operator}\nsource_ip={request.client.host if request.client else 'unknown'}")
     return FileResponse(
         path=snapshot_path,
         filename="monitor.db",

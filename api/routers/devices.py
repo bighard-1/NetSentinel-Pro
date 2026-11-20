@@ -2,7 +2,7 @@ import csv
 import io
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, desc, func, select
@@ -36,7 +36,7 @@ class DeviceCreate(BaseModel):
     probe_port: int | None = Field(default=None, ge=1, le=65535)
     probe_path: str = Field(default="", max_length=500)
     expected_status: int | None = Field(default=None, ge=100, le=599)
-    probe_interval_seconds: int | None = Field(default=None, ge=1, le=86400)
+    probe_interval_seconds: int | None = Field(default=None, ge=5, le=86400)
     probe_retry_count: int = Field(default=0, ge=0, le=2)
 
     @field_validator("ip_address")
@@ -53,7 +53,7 @@ class DeviceBulkUpdate(BaseModel):
     device_ids: list[int] = Field(min_length=1, max_length=1000)
     monitoring_state: MonitoringState | None = None
     group_name: str | None = Field(default=None, min_length=1, max_length=100)
-    probe_interval_seconds: int | None = Field(default=None, ge=1, le=86400)
+    probe_interval_seconds: int | None = Field(default=None, ge=5, le=86400)
     probe_retry_count: int | None = Field(default=None, ge=0, le=2)
 
 
@@ -76,7 +76,7 @@ class DeviceUpdate(BaseModel):
     probe_port: int | None = Field(default=None, ge=1, le=65535)
     probe_path: str | None = Field(default=None, max_length=500)
     expected_status: int | None = Field(default=None, ge=100, le=599)
-    probe_interval_seconds: int | None = Field(default=None, ge=1, le=86400)
+    probe_interval_seconds: int | None = Field(default=None, ge=5, le=86400)
     probe_retry_count: int | None = Field(default=None, ge=0, le=2)
 
     @field_validator("ip_address")
@@ -162,6 +162,8 @@ DeviceDetailOut.model_rebuild()
 
 
 def _validate_probe_config(probe_type: ProbeType, probe_port: int | None, probe_path: str, expected_status: int | None) -> None:
+    if any(character.isspace() or ord(character) < 32 for character in probe_path):
+        raise HTTPException(status_code=400, detail="probe_path must not contain whitespace or control characters")
     if probe_type == ProbeType.TCP and probe_port is None:
         raise HTTPException(status_code=400, detail="TCP probe requires probe_port")
     if probe_type != ProbeType.TCP and probe_port is not None:
@@ -236,9 +238,9 @@ def _iter_devices_csv(rows: list[DeviceOut]):
     for row in rows:
         writer.writerow(
             [
-                row.name,
+                _safe_csv_cell(row.name),
                 row.ip_address,
-                row.group_name,
+                _safe_csv_cell(row.group_name),
                 "true" if row.is_monitoring else "false",
                 row.monitoring_state,
                 row.latest_status,
@@ -248,12 +250,16 @@ def _iter_devices_csv(rows: list[DeviceOut]):
                 row.probe_interval_seconds,
                 "true" if row.in_maintenance else "false",
                 row.maintenance_until.isoformat() if row.maintenance_until else "",
-                row.maintenance_note,
+                _safe_csv_cell(row.maintenance_note),
             ]
         )
         yield buffer.getvalue()
         buffer.seek(0)
         buffer.truncate(0)
+
+
+def _safe_csv_cell(value: str) -> str:
+    return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
 
 
 def _deleted_devices_csv_snapshot(devices: list[Device]) -> str:
@@ -444,9 +450,11 @@ def list_devices() -> list[DeviceOut]:
 
 
 @router.get("/export.csv")
-def export_devices_csv(_: None = Depends(verify_admin_token)) -> StreamingResponse:
+def export_devices_csv(request: Request, operator: str = Depends(current_admin_subject)) -> StreamingResponse:
     rows = load_current_device_statuses()
-    log_event(category="asset", message=f"导出设备清单: {len(rows)} 台")
+    log_event(category="asset", message=f"导出设备清单: {len(rows)} 台",
+              details=_audit_details(action="EXPORT", operator=operator,
+                                     extra={"source_ip": request.client.host if request.client else "unknown"}))
     return StreamingResponse(
         _iter_devices_csv(rows),
         media_type="text/csv; charset=utf-8",
@@ -463,6 +471,33 @@ def get_deleted_snapshot(log_id: int, _: None = Depends(verify_admin_token)) -> 
             log_id=log_id,
             rows=[_deleted_snapshot_device_out(row, existing_ips) for row in rows],
         )
+
+
+@router.get("/delete-snapshots/{log_id}/download")
+def download_deleted_snapshot(log_id: int, request: Request,
+                              operator: str = Depends(current_admin_subject)) -> StreamingResponse:
+    with SessionLocal() as session:
+        rows = _load_deleted_snapshot_rows(session, log_id)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["id", "name", "ip_address", "group_name", "monitoring_state", "probe_type",
+                     "probe_port", "probe_path", "expected_status", "probe_interval_seconds",
+                     "maintenance_until", "maintenance_note"])
+    for row in rows:
+        writer.writerow([
+            row["old_id"] or "", _safe_csv_cell(row["name"]), row["ip_address"],
+            _safe_csv_cell(row["group_name"]), row["monitoring_state"].value,
+            row["probe_type"].value, row["probe_port"] or "", _safe_csv_cell(row["probe_path"]),
+            row["expected_status"] or "", row["probe_interval_seconds"] or "",
+            row["maintenance_until"].isoformat() if row["maintenance_until"] else "",
+            _safe_csv_cell(row["maintenance_note"]),
+        ])
+    log_event(category="asset", message=f"下载删除快照 CSV: {log_id}",
+              details=_audit_details(action="DOWNLOAD_SNAPSHOT", operator=operator,
+                                     extra={"log_id": log_id,
+                                            "source_ip": request.client.host if request.client else "unknown"}))
+    return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv; charset=utf-8",
+                             headers={"Content-Disposition": f'attachment; filename="deleted-devices-{log_id}.csv"'})
 
 
 @router.get("/delete-snapshots", response_model=list[DeletedSnapshotSummaryOut])

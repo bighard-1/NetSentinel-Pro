@@ -6,6 +6,8 @@ from api.dependencies import verify_admin_token
 from database import SessionLocal
 from logging_service import log_event
 from models import Device, GroupNotificationRoute, GroupPolicy
+from services.secrets import apply_secret_update, mask_secret, MASK
+from services.webhook_security import validate_webhook_url
 from datetime import datetime
 
 router = APIRouter(prefix="/api", tags=["Groups"])
@@ -30,6 +32,11 @@ class GroupPolicyUpdate(BaseModel):
     silence_enabled: bool = False
     silence_start: str = Field(default="", max_length=5)
     silence_end: str = Field(default="", max_length=5)
+
+    @field_validator("feishu_webhook")
+    @classmethod
+    def validate_feishu_webhook(cls, value: str) -> str:
+        return value if not value or value.startswith(MASK) else validate_webhook_url(value)
 
     @field_validator("group_name")
     @classmethod
@@ -66,7 +73,7 @@ def _group_policy_out(policy: GroupPolicy) -> GroupPolicyOut:
         group_name=policy.group_name,
         offline_threshold=policy.offline_threshold,
         online_threshold=policy.online_threshold,
-        feishu_webhook=policy.feishu_webhook,
+        feishu_webhook=mask_secret(policy.feishu_webhook),
         silence_enabled=policy.silence_enabled,
         silence_start=policy.silence_start,
         silence_end=policy.silence_end,
@@ -132,7 +139,7 @@ def upsert_group_policy(
 
         policy.offline_threshold = payload.offline_threshold
         policy.online_threshold = payload.online_threshold
-        policy.feishu_webhook = payload.feishu_webhook.strip()
+        policy.feishu_webhook = apply_secret_update(payload.feishu_webhook, policy.feishu_webhook)
         policy.silence_enabled = payload.silence_enabled
         policy.silence_start = payload.silence_start
         policy.silence_end = payload.silence_end

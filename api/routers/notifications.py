@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import desc, func, select
 
 from alert import send_test_notification
@@ -15,6 +15,9 @@ from models import (
     NotificationChannelType,
     NotificationDelivery,
 )
+from services.secrets import apply_secret_update, encrypt_secret, mask_secret, MASK
+from services.webhook_security import validate_webhook_url
+from services.redaction import redact_text
 
 router = APIRouter(prefix="/api", tags=["Notifications"])
 
@@ -35,6 +38,12 @@ class NotificationChannelUpdate(BaseModel):
     enabled: bool = True
     extra_config: str = Field(default="", max_length=4000)
 
+    @model_validator(mode="after")
+    def validate_endpoint(self):
+        if self.channel_type != NotificationChannelType.EMAIL and self.endpoint and not self.endpoint.startswith(MASK):
+            validate_webhook_url(self.endpoint)
+        return self
+
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
@@ -44,7 +53,7 @@ class NotificationChannelUpdate(BaseModel):
     @classmethod
     def validate_extra_config(cls, value: str) -> str:
         value = value.strip()
-        if not value:
+        if not value or value.startswith(MASK):
             return ""
         try:
             json.loads(value)
@@ -82,9 +91,9 @@ def _notification_channel_out(channel: NotificationChannel) -> NotificationChann
         id=channel.id,
         name=channel.name,
         channel_type=channel.channel_type.value,
-        endpoint=channel.endpoint,
+        endpoint=mask_secret(channel.endpoint),
         enabled=channel.enabled,
-        extra_config=channel.extra_config,
+        extra_config=mask_secret(channel.extra_config),
     )
 
 
@@ -99,8 +108,8 @@ def _notification_delivery_out(delivery: NotificationDelivery) -> NotificationDe
         title=delivery.title,
         status=delivery.status,
         http_status=delivery.http_status,
-        error=delivery.error,
-        response_excerpt=delivery.response_excerpt,
+        error=redact_text(delivery.error),
+        response_excerpt=redact_text(delivery.response_excerpt),
         created_at=delivery.created_at,
     )
 
@@ -126,9 +135,9 @@ def create_notification_channel(
         channel = NotificationChannel(
             name=payload.name,
             channel_type=payload.channel_type,
-            endpoint=payload.endpoint.strip(),
+            endpoint=encrypt_secret(payload.endpoint.strip()),
             enabled=payload.enabled,
-            extra_config=payload.extra_config.strip(),
+            extra_config=encrypt_secret(payload.extra_config.strip()),
         )
         session.add(channel)
         session.commit()
@@ -155,9 +164,9 @@ def update_notification_channel(
             raise HTTPException(status_code=400, detail="channel name already exists")
         channel.name = payload.name
         channel.channel_type = payload.channel_type
-        channel.endpoint = payload.endpoint.strip()
+        channel.endpoint = apply_secret_update(payload.endpoint, channel.endpoint)
         channel.enabled = payload.enabled
-        channel.extra_config = payload.extra_config.strip()
+        channel.extra_config = apply_secret_update(payload.extra_config, channel.extra_config)
         session.commit()
         session.refresh(channel)
 

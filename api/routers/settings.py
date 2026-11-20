@@ -10,6 +10,8 @@ from database import SessionLocal
 from logging_service import log_event
 from models import SystemSetting
 from services.report_scheduler import schedule_weekly_report_job
+from services.secrets import apply_secret_update, mask_secret, MASK
+from services.webhook_security import validate_webhook_url
 
 router = APIRouter(prefix="/api", tags=["Settings"])
 VALID_WEEKDAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
@@ -31,7 +33,7 @@ class SettingOut(BaseModel):
 
 
 class SettingUpdate(BaseModel):
-    ping_interval: int = Field(ge=1, le=3600)
+    ping_interval: int = Field(ge=5, le=3600)
     offline_threshold: int = Field(ge=1, le=20)
     online_threshold: int = Field(ge=1, le=20)
     feishu_webhook: str = Field(default="", max_length=1024)
@@ -42,6 +44,11 @@ class SettingUpdate(BaseModel):
     weekly_report_day_of_week: str = Field(default="fri", min_length=3, max_length=3)
     weekly_report_time: str = Field(default="17:00", max_length=5)
     weekly_report_timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=64)
+
+    @field_validator("feishu_webhook")
+    @classmethod
+    def validate_feishu_webhook(cls, value: str) -> str:
+        return value if not value or value.startswith(MASK) else validate_webhook_url(value)
 
     @field_validator("silence_start", "silence_end")
     @classmethod
@@ -118,7 +125,7 @@ def _setting_out(setting: SystemSetting) -> SettingOut:
         ping_interval=setting.ping_interval,
         offline_threshold=setting.offline_threshold,
         online_threshold=setting.online_threshold,
-        feishu_webhook=setting.feishu_webhook,
+        feishu_webhook=mask_secret(setting.feishu_webhook),
         silence_enabled=setting.silence_enabled,
         silence_start=setting.silence_start,
         silence_end=setting.silence_end,
@@ -146,7 +153,7 @@ def update_settings(
         setting.ping_interval = payload.ping_interval
         setting.offline_threshold = payload.offline_threshold
         setting.online_threshold = payload.online_threshold
-        setting.feishu_webhook = payload.feishu_webhook.strip()
+        setting.feishu_webhook = apply_secret_update(payload.feishu_webhook, setting.feishu_webhook)
         setting.silence_enabled = payload.silence_enabled
         setting.silence_start = payload.silence_start
         setting.silence_end = payload.silence_end

@@ -96,6 +96,13 @@ class AlertOutbox(Base):
     last_error: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
 
 
+class RevokedToken(Base):
+    __tablename__ = "revoked_tokens"
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class ProbeMetric(Base):
     __tablename__ = "probe_metrics"
     __table_args__ = (Index("ix_probe_metrics_device_id_checked_at", "device_id", "checked_at"),)
