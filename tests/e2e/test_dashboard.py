@@ -67,6 +67,11 @@ def test_dashboard_core_actions() -> None:
                     page.get_by_placeholder("管理员密码").fill("e2e-strong-password")
                     page.get_by_role("button", name="登录", exact=True).click()
                     page.get_by_role("button", name="添加设备").wait_for()
+                    page.get_by_role("button", name="切换语言 EN").click()
+                    page.get_by_role("heading", name="Live target wall").wait_for()
+                    assert page.locator("html").get_attribute("lang") == "en"
+                    page.get_by_role("button", name="Switch language 中文").click()
+                    page.get_by_role("heading", name="监控目标实时墙").wait_for()
                     page.get_by_role("button", name="浅色").click()
                     assert "light" in page.locator("body").get_attribute("class")
                     page.get_by_role("button", name="深色").click()

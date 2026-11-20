@@ -454,51 +454,52 @@
     <header class="topbar">
       <div class="brand">
         <p class="eyebrow">NETSENTINEL PRO / TARGET WALL</p>
-        <h1>监控目标实时墙</h1>
-        <p class="subtitle">每台资产就是一张状态卡片，离线变红并自动置顶。</p>
+        <h1>{{ t('title') }}</h1>
+        <p class="subtitle">{{ t('subtitle') }}</p>
       </div>
       <div class="actions">
-        <button v-if="adminToken && authRole === 'admin'" class="btn primary" @click="openAssetModalForCreate">添加设备</button>
-        <button v-if="adminToken && authRole === 'admin'" class="btn" :disabled="isTriggering" @click="triggerMonitorNow">{{ isTriggering ? '探测中' : '立即探测' }}</button>
-        <button v-if="adminToken && authRole === 'admin'" class="btn" @click="toggleBulkMode">{{ bulkMode ? '退出批量' : '批量模式' }}</button>
-        <button v-if="authRole === 'admin'" class="btn" @click="openSettings">控制台</button>
-        <button class="btn" @click="toggleTheme">{{ theme==='dark' ? '浅色' : '深色' }}</button>
-        <button class="btn wall-toggle" @click="toggleWallMode">{{ wallMode ? '退出大屏' : '大屏模式' }}</button>
-        <button v-if="adminToken" class="btn" @click="logoutAdmin">退出</button>
+        <button v-if="adminToken && authRole === 'admin'" class="btn primary" @click="openAssetModalForCreate">{{ t('addDevice') }}</button>
+        <button v-if="adminToken && authRole === 'admin'" class="btn" :disabled="isTriggering" @click="triggerMonitorNow">{{ t(isTriggering ? 'probing' : 'probeNow') }}</button>
+        <button v-if="adminToken && authRole === 'admin'" class="btn" @click="toggleBulkMode">{{ t(bulkMode ? 'exitBulk' : 'bulkMode') }}</button>
+        <button v-if="authRole === 'admin'" class="btn" @click="openSettings">{{ t('console') }}</button>
+        <button class="btn" @click="toggleTheme">{{ t(theme==='dark' ? 'light' : 'dark') }}</button>
+        <button class="btn wall-toggle" @click="toggleWallMode">{{ t(wallMode ? 'exitWall' : 'wallMode') }}</button>
+        <button class="btn" @click="toggleLocale" :aria-label="`${t('language')} ${locale==='zh' ? 'EN' : '中文'}`">{{ locale==='zh' ? 'EN' : '中文' }}</button>
+        <button v-if="adminToken" class="btn" @click="logoutAdmin">{{ t('logout') }}</button>
       </div>
     </header>
-    <div v-if="!networkConnected" class="connection-banner" role="alert">连接中断，页面将自动重试。当前数据可能已过期。</div>
+    <div v-if="!networkConnected" class="connection-banner" role="alert">{{ t('disconnected') }}</div>
 
-    <section class="overview" aria-label="监控状态概览" v-if="adminToken">
-      <div class="overview-item"><small>在线</small><strong class="msg">● {{ stateCounts.online }}</strong></div>
-      <div class="overview-item"><small>离线</small><strong class="err">■ {{ stateCounts.offline }}</strong></div>
-      <div class="overview-item"><small>疑似异常</small><strong style="color:var(--color-warn)">▲ {{ stateCounts.suspect }}</strong></div>
-      <div class="overview-item"><small>待确认</small><strong>○ {{ stateCounts.pending }}</strong></div>
-      <div class="overview-item"><small>维护 / 暂停 / 停止</small><strong>{{ stateCounts.maintenance }} / {{ stateCounts.paused }} / {{ stateCounts.stopped }}</strong></div>
-      <div class="overview-item health"><small>监控引擎</small><strong :class="engineReady ? 'msg' : 'err'">{{ engineReady ? '● 正常运行' : '▲ 待检查' }}</strong><small>当前离线：{{ offlineTop.join('、') || '无' }}</small></div>
+    <section class="overview" :aria-label="t('overview')" v-if="adminToken">
+      <div class="overview-item"><small>{{ t('online') }}</small><strong class="msg">● {{ stateCounts.online }}</strong></div>
+      <div class="overview-item"><small>{{ t('offline') }}</small><strong class="err">■ {{ stateCounts.offline }}</strong></div>
+      <div class="overview-item"><small>{{ t('suspect') }}</small><strong style="color:var(--color-warn)">▲ {{ stateCounts.suspect }}</strong></div>
+      <div class="overview-item"><small>{{ t('pending') }}</small><strong>○ {{ stateCounts.pending }}</strong></div>
+      <div class="overview-item"><small>{{ t('otherStates') }}</small><strong>{{ stateCounts.maintenance }} / {{ stateCounts.paused }} / {{ stateCounts.stopped }}</strong></div>
+      <div class="overview-item health"><small>{{ t('engine') }}</small><strong :class="engineReady ? 'msg' : 'err'">{{ t(engineReady ? 'engineReady' : 'engineCheck') }}</strong><small>{{ t('currentlyOffline') }}{{ offlineTop.join('、') || t('none') }}</small></div>
     </section>
 
     <section class="layout">
       <aside class="panel">
         <div class="panel-head">
-          <h2 class="panel-title">全网健康</h2>
+          <h2 class="panel-title">{{ t('networkHealth') }}</h2>
           <span class="panel-note">{{ formatTime(summary.generated_at) }}</span>
         </div>
         <div class="panel-body">
           <div class="stat-grid">
             <div class="stat wide">
-              <div class="stat-label">7日在线率</div>
+              <div class="stat-label">{{ t('uptime7d') }}</div>
               <div class="stat-value accent">{{ summary.uptime_percent_7d }}%</div>
             </div>
-            <div class="stat"><div class="stat-label">在线</div><div class="stat-value good">{{ onlineCount }}</div></div>
-            <div class="stat"><div class="stat-label">离线</div><div class="stat-value bad">{{ offlineCount }}</div></div>
-            <div class="stat"><div class="stat-label">未知</div><div class="stat-value warn">{{ unknownCount }}</div></div>
-            <div class="stat"><div class="stat-label">暂停</div><div class="stat-value">{{ summary.paused_devices || pausedCount }}</div></div>
-            <div class="stat wide"><div class="stat-label">24小时离线告警</div><div class="stat-value warn">{{ summary.offline_alerts_24h }}</div></div>
+            <div class="stat"><div class="stat-label">{{ t('online') }}</div><div class="stat-value good">{{ onlineCount }}</div></div>
+            <div class="stat"><div class="stat-label">{{ t('offline') }}</div><div class="stat-value bad">{{ offlineCount }}</div></div>
+            <div class="stat"><div class="stat-label">{{ t('unknown') }}</div><div class="stat-value warn">{{ unknownCount }}</div></div>
+            <div class="stat"><div class="stat-label">{{ t('paused') }}</div><div class="stat-value">{{ summary.paused_devices || pausedCount }}</div></div>
+            <div class="stat wide"><div class="stat-label">{{ t('offlineAlerts24h') }}</div><div class="stat-value warn">{{ summary.offline_alerts_24h }}</div></div>
           </div>
         </div>
         <div class="panel-head">
-          <h2 class="panel-title">分组态势</h2>
+          <h2 class="panel-title">{{ t('groups') }}</h2>
           <span class="panel-note">{{ groups.length }} GROUPS</span>
         </div>
         <div class="panel-body group-list">
@@ -508,59 +509,59 @@
               <span class="panel-note">{{ g.online }}/{{ g.total }}</span>
             </div>
             <div class="bar"><div class="bar-fill" :style="{width: g.ratio + '%'}"></div></div>
-            <span class="panel-note">离线 {{ g.offline }} · 未知 {{ g.unknown }} · 暂停 {{ g.paused }}</span>
+            <span class="panel-note">{{ t('offline') }} {{ g.offline }} · {{ t('unknown') }} {{ g.unknown }} · {{ t('paused') }} {{ g.paused }}</span>
           </div>
-          <div v-if="!groupStats.length" class="empty">暂无分组</div>
+          <div v-if="!groupStats.length" class="empty">{{ t('noGroups') }}</div>
         </div>
       </aside>
 
       <main class="panel">
         <div class="panel-head">
-          <h2 class="panel-title">监控目标墙</h2>
+          <h2 class="panel-title">{{ t('targetWall') }}</h2>
           <span class="panel-note">{{ filteredDevices.length }} VISIBLE / {{ totalCount }} TOTAL</span>
         </div>
         <div class="group-tabs">
-          <button class="group-tab" :class="{active:selectedGroup==='__ALL__'}" @click="selectedGroup='__ALL__'">全部 {{ totalCount }}</button>
+          <button class="group-tab" :class="{active:selectedGroup==='__ALL__'}" @click="selectedGroup='__ALL__'">{{ t('all') }} {{ totalCount }}</button>
           <button v-for="g in groupStats" :key="g.name" class="group-tab" :class="{active:selectedGroup===g.name}" @click="selectedGroup=g.name">{{ g.name }} {{ g.total }}</button>
         </div>
         <div class="toolbar">
-          <input v-model="keyword" class="input" aria-label="搜索设备名称或 IP" placeholder="搜索设备名称或 IP，按 / 快速聚焦" ref="searchInput" />
-          <select v-model="statusFilter" class="select">
-            <option value="">全部状态</option>
-            <option value="OFFLINE">只看离线</option>
-            <option value="SUSPECT">只看疑似异常</option>
-            <option value="PENDING">只看待确认</option>
-            <option value="ONLINE">只看在线</option>
-            <option value="MAINTENANCE">只看维护</option>
-            <option value="PAUSED">只看暂停</option>
-            <option value="STOPPED">只看停止</option>
+          <input v-model="keyword" class="input" :aria-label="t('searchLabel')" :placeholder="t('searchPlaceholder')" ref="searchInput" />
+          <select v-model="statusFilter" class="select" :aria-label="t('statusFilter')">
+            <option value="">{{ t('allStatuses') }}</option>
+            <option value="OFFLINE">{{ t('onlyOffline') }}</option>
+            <option value="SUSPECT">{{ t('onlySuspect') }}</option>
+            <option value="PENDING">{{ t('onlyPending') }}</option>
+            <option value="ONLINE">{{ t('onlyOnline') }}</option>
+            <option value="MAINTENANCE">{{ t('onlyMaintenance') }}</option>
+            <option value="PAUSED">{{ t('onlyPaused') }}</option>
+            <option value="STOPPED">{{ t('onlyStopped') }}</option>
           </select>
         </div>
         <div class="view-controls">
-          <label class="panel-note" for="sort-mode">排序</label>
+          <label class="panel-note" for="sort-mode">{{ t('sort') }}</label>
           <select id="sort-mode" v-model="sortMode" class="select">
-            <option value="status">状态（离线置顶）</option>
-            <option value="name">名称</option>
-            <option value="latency">延迟</option>
-            <option value="changed">最近变化</option>
+            <option value="status">{{ t('sortStatus') }}</option>
+            <option value="name">{{ t('name') }}</option>
+            <option value="latency">{{ t('latency') }}</option>
+            <option value="changed">{{ t('lastChange') }}</option>
           </select>
-          <button class="btn" :aria-pressed="viewMode==='cards'" @click="viewMode='cards'">卡片</button>
-          <button class="btn" :aria-pressed="viewMode==='table'" @click="viewMode='table'">表格</button>
-          <span class="panel-note">每页 {{ pageSize }} 台 · 共 {{ filteredDevices.length }} 台</span>
+          <button class="btn" :aria-pressed="viewMode==='cards'" @click="viewMode='cards'">{{ t('cards') }}</button>
+          <button class="btn" :aria-pressed="viewMode==='table'" @click="viewMode='table'">{{ t('table') }}</button>
+          <span class="panel-note">{{ t('perPage') }} {{ pageSize }} · {{ t('total') }} {{ filteredDevices.length }}</span>
         </div>
         <div v-if="bulkMode" class="bulk-bar">
-          <button class="btn" @click="selectVisibleDevices">选择当前可见</button>
-          <button class="btn" @click="clearBulkSelection">清空选择</button>
-          <input v-model="bulkGroupName" class="input" placeholder="新分组" />
-          <input v-model.number="bulkProbeInterval" type="number" min="1" max="86400" class="input" placeholder="探测周期秒" />
+          <button class="btn" @click="selectVisibleDevices">{{ t('selectVisible') }}</button>
+          <button class="btn" @click="clearBulkSelection">{{ t('clearSelection') }}</button>
+          <input v-model="bulkGroupName" class="input" :placeholder="t('newGroup')" />
+          <input v-model.number="bulkProbeInterval" type="number" min="1" max="86400" class="input" :placeholder="t('probeInterval')" />
           <div class="actions" style="justify-content:flex-start;">
-            <button class="btn" :disabled="!selectedDeviceIds.length || isBulkUpdating" @click="bulkPause">暂停</button>
-            <button class="btn" :disabled="!selectedDeviceIds.length || isBulkUpdating" @click="bulkStop">停止</button>
-            <button class="btn" :disabled="!selectedDeviceIds.length || !bulkGroupName.trim() || isBulkUpdating" @click="bulkUpdateGroup">改分组</button>
-            <button class="btn" :disabled="!selectedDeviceIds.length || !bulkProbeInterval || isBulkUpdating" @click="bulkUpdateProbeInterval">改周期</button>
-            <button class="btn danger" :disabled="!selectedDeviceIds.length || isBulkUpdating" @click="openBulkDeleteConfirm">删除</button>
+            <button class="btn" :disabled="!selectedDeviceIds.length || isBulkUpdating" @click="bulkPause">{{ t('pause') }}</button>
+            <button class="btn" :disabled="!selectedDeviceIds.length || isBulkUpdating" @click="bulkStop">{{ t('stop') }}</button>
+            <button class="btn" :disabled="!selectedDeviceIds.length || !bulkGroupName.trim() || isBulkUpdating" @click="bulkUpdateGroup">{{ t('changeGroup') }}</button>
+            <button class="btn" :disabled="!selectedDeviceIds.length || !bulkProbeInterval || isBulkUpdating" @click="bulkUpdateProbeInterval">{{ t('changeInterval') }}</button>
+            <button class="btn danger" :disabled="!selectedDeviceIds.length || isBulkUpdating" @click="openBulkDeleteConfirm">{{ t('delete') }}</button>
           </div>
-          <span class="panel-note">已选 {{ selectedDeviceIds.length }} 台</span>
+          <span class="panel-note">{{ t('selected') }} {{ selectedDeviceIds.length }}</span>
         </div>
         <div v-if="error" class="err" style="padding: 12px;">{{ error }}</div>
         <div v-if="viewMode==='cards'" class="device-grid">
@@ -577,40 +578,40 @@
               <span class="badge" :class="statusBadgeName(device)">{{ displayStatus(device) }}</span>
             </div>
             <div class="meta">
-              <span>地址 <span class="mono">{{ device.ip_address }}</span></span>
-              <span>探测 {{ probeTypeText(device.probe_type) }}{{ device.probe_port ? `:${device.probe_port}` : '' }}</span>
-              <span v-if="device.probe_path">路径 <span class="mono">{{ device.probe_path }}</span></span>
-              <span v-if="device.in_maintenance">维护至 {{ formatTime(device.maintenance_until) }}</span>
-              <span v-if="device.latest_event_time">状态持续 {{ formatAge(device.latest_event_time) }}</span>
-              <span>最近成功 {{ formatTime(device.last_success_at) }}</span>
-              <span v-if="device.last_error" class="failure-reason" :title="device.last_error">原因 {{ device.last_error }}</span>
-              <span v-if="isStale(device)" class="stale-label">▲ 数据过期 · 最近探测 {{ formatTime(device.latest_probe_time) }}</span>
+              <span>{{ t('address') }} <span class="mono">{{ device.ip_address }}</span></span>
+              <span>{{ t('probe') }} {{ probeTypeText(device.probe_type) }}{{ device.probe_port ? `:${device.probe_port}` : '' }}</span>
+              <span v-if="device.probe_path">{{ t('path') }} <span class="mono">{{ device.probe_path }}</span></span>
+              <span v-if="device.in_maintenance">{{ t('maintenanceUntil') }} {{ formatTime(device.maintenance_until) }}</span>
+              <span v-if="device.latest_event_time">{{ t('statusDuration') }} {{ formatAge(device.latest_event_time) }}</span>
+              <span>{{ t('lastSuccess') }} {{ formatTime(device.last_success_at) }}</span>
+              <span v-if="device.last_error" class="failure-reason" :title="device.last_error">{{ t('reason') }} {{ device.last_error }}</span>
+              <span v-if="isStale(device)" class="stale-label">▲ {{ t('stale') }} · {{ t('lastProbe') }} {{ formatTime(device.latest_probe_time) }}</span>
             </div>
           </article>
-          <div v-if="!loadingDevices && !filteredDevices.length" class="empty">{{ devices.length ? '没有匹配的设备，请调整筛选条件。' : '还没有监控目标。点击“添加设备”创建第一个目标。' }}</div>
+          <div v-if="!loadingDevices && !filteredDevices.length" class="empty">{{ t(devices.length ? 'noMatches' : 'noDevices') }}</div>
         </div>
         <div v-else class="table-wrap" style="margin:12px;">
-          <table aria-label="监控目标表格"><thead><tr><th>设备</th><th>地址 / 探测</th><th>状态</th><th>状态持续</th><th>最近成功</th><th>失败原因</th></tr></thead>
+          <table :aria-label="t('targetTable')"><thead><tr><th>{{ t('device') }}</th><th>{{ t('addressProbe') }}</th><th>{{ t('status') }}</th><th>{{ t('statusDuration') }}</th><th>{{ t('lastSuccess') }}</th><th>{{ t('failureReason') }}</th></tr></thead>
           <tbody>
             <tr v-for="device in visibleDevices" :key="device.id" class="device-table-row" tabindex="0" @click="handleDeviceCardClick(device)" @keydown.enter="handleDeviceCardClick(device)">
               <td>{{ device.name }}</td><td class="mono">{{ device.ip_address }} · {{ probeTypeText(device.probe_type) }}{{ device.probe_port ? `:${device.probe_port}` : device.probe_path }}</td>
-              <td><span class="badge" :class="statusBadgeName(device)">{{ displayStatus(device) }}</span><span v-if="isStale(device)" class="stale-label"> 数据过期</span></td>
+              <td><span class="badge" :class="statusBadgeName(device)">{{ displayStatus(device) }}</span><span v-if="isStale(device)" class="stale-label"> {{ t('stale') }}</span></td>
               <td>{{ formatAge(device.latest_event_time) }}</td><td>{{ formatTime(device.last_success_at) }}</td><td>{{ device.last_error || '-' }}</td>
             </tr>
-            <tr v-if="!filteredDevices.length"><td colspan="6" class="empty">没有匹配的设备</td></tr>
+            <tr v-if="!filteredDevices.length"><td colspan="6" class="empty">{{ t('noMatchesShort') }}</td></tr>
           </tbody></table>
         </div>
-        <nav v-if="pageCount>1" class="pagination" aria-label="设备分页">
-          <button class="btn" :disabled="currentPage<=1" @click="currentPage--">上一页</button>
-          <span>第 {{ currentPage }} / {{ pageCount }} 页</span>
-          <button class="btn" :disabled="currentPage>=pageCount" @click="currentPage++">下一页</button>
+        <nav v-if="pageCount>1" class="pagination" :aria-label="t('pagination')">
+          <button class="btn" :disabled="currentPage<=1" @click="currentPage--">{{ t('previous') }}</button>
+          <span>{{ t('page') }} {{ currentPage }} / {{ pageCount }}</span>
+          <button class="btn" :disabled="currentPage>=pageCount" @click="currentPage++">{{ t('next') }}</button>
         </nav>
       </main>
 
       <aside class="right-stack">
         <section class="panel">
           <div class="panel-head">
-            <h2 class="panel-title">风险设备</h2>
+            <h2 class="panel-title">{{ t('riskDevices') }}</h2>
             <span class="panel-note">7 DAYS</span>
           </div>
           <div class="panel-body risk-list">
@@ -621,16 +622,16 @@
               </div>
               <div class="meta">
                 <span class="mono">{{ item.ip_address }}</span>
-                <span>离线 {{ item.offline_count_7d }} 次 · 累计 {{ formatDuration(item.offline_seconds_7d) }}</span>
+                <span>{{ t('offline') }} {{ item.offline_count_7d }} · {{ t('cumulative') }} {{ formatDuration(item.offline_seconds_7d) }}</span>
               </div>
             </div>
-            <div v-if="!riskDevices.length" class="empty">暂无风险设备</div>
+            <div v-if="!riskDevices.length" class="empty">{{ t('noRiskDevices') }}</div>
           </div>
         </section>
 
         <section class="panel">
           <div class="panel-head">
-            <h2 class="panel-title">最新告警</h2>
+            <h2 class="panel-title">{{ t('latestAlerts') }}</h2>
             <span class="panel-note">{{ adminToken ? 'LIVE' : 'LOGIN' }}</span>
           </div>
           <div class="panel-body event-list">
@@ -645,9 +646,9 @@
                   <span>{{ formatTime(alert.event_time) }} · {{ formatDuration(alert.duration_seconds) }}</span>
                 </div>
               </div>
-              <div v-if="!alerts.length" class="empty">暂无告警记录</div>
+              <div v-if="!alerts.length" class="empty">{{ t('noAlerts') }}</div>
             </template>
-            <div v-else class="empty">登录后显示告警时间线</div>
+            <div v-else class="empty">{{ t('loginForAlerts') }}</div>
           </div>
         </section>
       </aside>
@@ -1038,7 +1039,7 @@
             <label>设备名称<input v-model="assetForm.name" class="input" placeholder="设备名称" aria-label="设备名称" /><span v-if="assetShowValidation && assetFormErrors.name" class="err">{{ assetFormErrors.name }}</span></label>
             <label>IP 地址或主机名<input v-model="assetForm.ip_address" class="input" placeholder="IP地址或主机名" aria-label="IP 地址或主机名" /><span v-if="assetShowValidation && assetFormErrors.ip_address" class="err">{{ assetFormErrors.ip_address }}</span></label>
             <input v-model="assetForm.group_name" class="input" placeholder="所属分组" />
-            <select v-model="assetForm.probe_type" class="select">
+            <select v-model="assetForm.probe_type" class="select" aria-label="探测类型">
               <option value="ICMP">ICMP Ping</option>
               <option value="TCP">TCP 端口</option>
               <option value="HTTP">HTTP 状态码</option>
@@ -1049,7 +1050,7 @@
             <input v-if="assetForm.probe_type==='HTTP'" v-model.number="assetForm.expected_status" type="number" min="100" max="599" class="input" placeholder="期望状态码，留空表示 2xx/3xx 均视为成功" />
             <input v-model.number="assetForm.probe_interval_seconds" type="number" min="1" max="86400" class="input" placeholder="单设备探测周期秒数，留空跟随全局" />
             <span v-if="assetShowValidation && assetFormErrors.probe_interval_seconds" class="err">{{ assetFormErrors.probe_interval_seconds }}</span>
-            <select v-model="assetForm.monitoring_state" class="select">
+            <select v-model="assetForm.monitoring_state" class="select" aria-label="监控状态">
               <option value="ACTIVE">启用监控</option>
               <option value="PAUSED">暂停监控</option>
               <option value="STOPPED">停止监控并保留卡片</option>
@@ -1154,6 +1155,21 @@
 const { createApp, ref, computed, watch, nextTick, onMounted, onBeforeUnmount } = Vue;
 createApp({
 setup() {
+const locale=ref(localStorage.getItem('netsentinel_locale')==='en'?'en':'zh');
+const messages={
+  zh:{title:'监控目标实时墙',subtitle:'每台资产就是一张状态卡片，离线变红并自动置顶。',addDevice:'添加设备',probing:'探测中',probeNow:'立即探测',exitBulk:'退出批量',bulkMode:'批量模式',console:'控制台',light:'浅色',dark:'深色',exitWall:'退出大屏',wallMode:'大屏模式',language:'切换语言',logout:'退出',disconnected:'连接中断，页面将自动重试。当前数据可能已过期。',overview:'监控状态概览',online:'在线',offline:'离线',suspect:'疑似异常',pending:'待确认',otherStates:'维护 / 暂停 / 停止',engine:'监控引擎',engineReady:'● 正常运行',engineCheck:'▲ 待检查',currentlyOffline:'当前离线：',none:'无'},
+  en:{title:'Live target wall',subtitle:'Each asset has a status card. Offline targets rise to the top.',addDevice:'Add device',probing:'Probing',probeNow:'Probe now',exitBulk:'Exit bulk mode',bulkMode:'Bulk mode',console:'Console',light:'Light',dark:'Dark',exitWall:'Exit wall mode',wallMode:'Wall mode',language:'Switch language',logout:'Log out',disconnected:'Connection lost. The page will retry automatically. Data may be stale.',overview:'Monitoring overview',online:'Online',offline:'Offline',suspect:'Suspected issue',pending:'Pending',otherStates:'Maintenance / Paused / Stopped',engine:'Monitoring engine',engineReady:'● Running',engineCheck:'▲ Check required',currentlyOffline:'Offline now: ',none:'None'}
+};
+Object.assign(messages.zh,{networkHealth:'全网健康',uptime7d:'7日在线率',unknown:'未知',paused:'暂停',offlineAlerts24h:'24小时离线告警',groups:'分组态势',noGroups:'暂无分组',targetWall:'监控目标墙',all:'全部',searchLabel:'搜索设备名称或 IP',searchPlaceholder:'搜索设备名称或 IP，按 / 快速聚焦',allStatuses:'全部状态',onlyOffline:'只看离线',onlySuspect:'只看疑似异常',onlyPending:'只看待确认',onlyOnline:'只看在线',onlyMaintenance:'只看维护',onlyPaused:'只看暂停',onlyStopped:'只看停止',sort:'排序',sortStatus:'状态（离线置顶）',name:'名称',latency:'延迟',lastChange:'最近变化',cards:'卡片',table:'表格',perPage:'每页',total:'共'});
+Object.assign(messages.en,{networkHealth:'Network health',uptime7d:'7-day uptime',unknown:'Unknown',paused:'Paused',offlineAlerts24h:'Offline alerts in 24h',groups:'Groups',noGroups:'No groups',targetWall:'Target wall',all:'All',searchLabel:'Search device name or IP',searchPlaceholder:'Search device name or IP; press / to focus',allStatuses:'All statuses',onlyOffline:'Offline only',onlySuspect:'Suspected issues',onlyPending:'Pending only',onlyOnline:'Online only',onlyMaintenance:'Maintenance only',onlyPaused:'Paused only',onlyStopped:'Stopped only',sort:'Sort',sortStatus:'Status (offline first)',name:'Name',latency:'Latency',lastChange:'Last change',cards:'Cards',table:'Table',perPage:'Per page',total:'Total'});
+Object.assign(messages.zh,{selectVisible:'选择当前可见',clearSelection:'清空选择',newGroup:'新分组',probeInterval:'探测周期秒',pause:'暂停',stop:'停止',changeGroup:'改分组',changeInterval:'改周期',delete:'删除',selected:'已选',address:'地址',probe:'探测',path:'路径',maintenanceUntil:'维护至',statusDuration:'状态持续',lastSuccess:'最近成功',reason:'原因',stale:'数据过期',lastProbe:'最近探测',noMatches:'没有匹配的设备，请调整筛选条件。',noDevices:'还没有监控目标。点击“添加设备”创建第一个目标。',targetTable:'监控目标表格',device:'设备',addressProbe:'地址 / 探测',status:'状态',failureReason:'失败原因',noMatchesShort:'没有匹配的设备',pagination:'设备分页',previous:'上一页',page:'第',next:'下一页',riskDevices:'风险设备',cumulative:'累计',noRiskDevices:'暂无风险设备',latestAlerts:'最新告警',noAlerts:'暂无告警记录',loginForAlerts:'登录后显示告警时间线',maintenance:'维护中',stopped:'已停止'});
+Object.assign(messages.en,{selectVisible:'Select visible',clearSelection:'Clear selection',newGroup:'New group',probeInterval:'Probe interval (seconds)',pause:'Pause',stop:'Stop',changeGroup:'Change group',changeInterval:'Change interval',delete:'Delete',selected:'Selected',address:'Address',probe:'Probe',path:'Path',maintenanceUntil:'Maintenance until',statusDuration:'Status duration',lastSuccess:'Last success',reason:'Reason',stale:'Stale data',lastProbe:'Last probe',noMatches:'No matching devices. Adjust the filters.',noDevices:'No targets yet. Add your first device.',targetTable:'Target table',device:'Device',addressProbe:'Address / Probe',status:'Status',failureReason:'Failure reason',noMatchesShort:'No matching devices',pagination:'Device pages',previous:'Previous',page:'Page',next:'Next',riskDevices:'At-risk devices',cumulative:'Total',noRiskDevices:'No at-risk devices',latestAlerts:'Latest alerts',noAlerts:'No alerts yet',loginForAlerts:'Log in to see alert history',maintenance:'In maintenance',stopped:'Stopped'});
+Object.assign(messages.zh,{notAvailable:'暂无',seconds:'秒',minutes:'分',hours:'小时',days:'天',waitingFirstProbe:'等待首次探测',probeSoon:'即将探测',nextProbe:'下次探测'});
+Object.assign(messages.en,{notAvailable:'N/A',seconds:'s',minutes:'min',hours:'h',days:'d',waitingFirstProbe:'Waiting for first probe',probeSoon:'Probing soon',nextProbe:'Next probe'});
+Object.assign(messages.zh,{statusFilter:'状态筛选'});
+Object.assign(messages.en,{statusFilter:'Filter by status'});
+const t=(key)=>messages[locale.value][key]||messages.zh[key]||key;
+const toggleLocale=()=>{locale.value=locale.value==='zh'?'en':'zh';localStorage.setItem('netsentinel_locale',locale.value);document.documentElement.lang=locale.value==='zh'?'zh-CN':'en';};
 const savedView=(()=>{try{return JSON.parse(localStorage.getItem('netsentinel_view')||'{}')}catch{return {}}})();
 const hashView=new URLSearchParams(location.hash.slice(1));
 const pendingDeviceId=ref(Number(hashView.get('device'))||null);
@@ -1379,7 +1395,7 @@ const offlineCount=computed(()=>stateCounts.value.offline);
 const unknownCount=computed(()=>stateCounts.value.pending+stateCounts.value.suspect);
 	const pausedCount=computed(()=>stateCounts.value.paused+stateCounts.value.stopped);
 const channelEndpointPlaceholder=computed(()=>{if(channelForm.value.channel_type==='EMAIL')return '收件人邮箱，多个用逗号分隔；SMTP 使用环境变量配置';if(channelForm.value.channel_type==='WEBHOOK')return 'https://example.com/webhook';return '机器人 Webhook 地址';});
-const statusText=(s)=>s==='ONLINE'?'在线':(s==='OFFLINE'?'离线':'未知');
+const statusText=(s)=>t(s==='ONLINE'?'online':s==='OFFLINE'?'offline':'unknown');
 const auditActionText=(action)=>({CREATE:'新增',BULK_CREATE:'批量导入',UPDATE:'编辑',PAUSE:'暂停',STOP:'停止',ENABLE:'启用',BULK_UPDATE:'批量编辑',BULK_PAUSE:'批量暂停',BULK_STOP:'批量停止',BULK_ENABLE:'批量启用',DELETE:'删除',BULK_DELETE:'批量删除',RESTORE:'恢复',MAINTENANCE:'维护'}[action]||action||'-');
 const probeTypeText=(type)=>({ICMP:'ICMP',TCP:'TCP',HTTP:'HTTP'}[type]||type||'ICMP');
 const channelTypeText=(type)=>({FEISHU:'飞书',WECOM:'企业微信',DINGTALK:'钉钉',WEBHOOK:'通用 Webhook',EMAIL:'邮件'}[type]||type);
@@ -1390,21 +1406,21 @@ const trendMetrics=(items)=>[...(items||[])].reverse().slice(-30);
 const trendHeight=(metric)=>{if(!metric.success)return '24px';const latency=metric.latency_ms||1;return `${Math.max(10,Math.min(92,Math.round(latency/4)+10))}px`;};
 const trendClass=(metric)=>({fail:!metric.success,warn:metric.success&&(metric.latency_ms||0)>300});
 const metricTitle=(metric)=>`${formatTime(metric.checked_at)} / ${metric.success?'成功':'失败'} / ${metric.latency_ms??'-'}ms${metric.http_status?` / HTTP ${metric.http_status}`:''}${metric.error?` / ${metric.error}`:''}`;
-const displayStatus=(d)=>{const kind=statusKind(d);return {ONLINE:'● 在线',OFFLINE:'■ 离线',SUSPECT:`▲ 疑似异常 ${d.failure_streak}/${d.offline_threshold||3}`,PENDING:'○ 待确认',MAINTENANCE:'◆ 维护中',PAUSED:'Ⅱ 已暂停',STOPPED:'■ 已停止'}[kind];};
+const displayStatus=(d)=>{const kind=statusKind(d);return {ONLINE:`● ${t('online')}`,OFFLINE:`■ ${t('offline')}`,SUSPECT:`▲ ${t('suspect')} ${d.failure_streak}/${d.offline_threshold||3}`,PENDING:`○ ${t('pending')}`,MAINTENANCE:`◆ ${t('maintenance')}`,PAUSED:`Ⅱ ${t('paused')}`,STOPPED:`■ ${t('stopped')}`}[kind];};
 const statusBadgeName=(d)=>typeof d==='string'?(d==='ONLINE'?'online':d==='OFFLINE'?'offline':'unknown'):statusKind(d).toLowerCase();
 const deviceClass=(d)=>({online:statusKind(d)==='ONLINE',offline:statusKind(d)==='OFFLINE',suspect:statusKind(d)==='SUSPECT',unknown:statusKind(d)==='PENDING',paused:statusKind(d)==='PAUSED',stopped:statusKind(d)==='STOPPED',maintenance:statusKind(d)==='MAINTENANCE',stale:isStale(d),selected:isDeviceSelected(d.id),'bulk-mode':bulkMode.value});
 	const normalizeDateMs=(value)=>{if(!value)return null;const normalized=/([zZ]|[+-]\d{2}:\d{2})$/.test(value)?value:(value+'Z');const ms=new Date(normalized).getTime();return Number.isNaN(ms)?null:ms;};
 	const showProbeCountdown=(d)=>d.monitoring_state==='ACTIVE';
 	const probeCountdownPercent=(d)=>{if(!showProbeCountdown(d))return 0;const start=normalizeDateMs(d.latest_probe_time);const due=normalizeDateMs(d.next_probe_due_at);if(!start||!due||due<=start)return 0;const remaining=Math.max(0,due-nowTick.value);return Math.max(0,Math.min(100,Math.round((remaining/(due-start))*100)));};
-	const probeCountdownText=(d)=>{if(!showProbeCountdown(d))return '';const due=normalizeDateMs(d.next_probe_due_at);if(!due)return '等待首次探测';const seconds=Math.ceil((due-nowTick.value)/1000);return seconds<=0?'即将探测':`下次探测 ${seconds}秒`;};
+	const probeCountdownText=(d)=>{if(!showProbeCountdown(d))return '';const due=normalizeDateMs(d.next_probe_due_at);if(!due)return t('waitingFirstProbe');const seconds=Math.ceil((due-nowTick.value)/1000);return seconds<=0?t('probeSoon'):`${t('nextProbe')} ${seconds}${t('seconds')}`;};
 	const probeStripClass=(d)=>showProbeCountdown(d)?statusBadgeName(d):'idle';
-	const formatTime=(value)=>{if(!value)return '暂无';const ms=normalizeDateMs(value);if(ms===null)return value;return new Date(ms).toLocaleString();};
-const formatAge=(value)=>{const ms=normalizeDateMs(value);if(ms===null)return '暂无';const seconds=Math.max(0,Math.floor((nowTick.value-ms)/1000));if(seconds<60)return `${seconds} 秒`;if(seconds<3600)return `${Math.floor(seconds/60)} 分`;if(seconds<86400)return `${Math.floor(seconds/3600)} 小时`;return `${Math.floor(seconds/86400)} 天`;};
-const formatDuration=(seconds)=>{if(!seconds)return '-';const h=Math.floor(seconds/3600);const m=Math.floor((seconds%3600)/60);const s=seconds%60;if(h)return `${h}小时${m}分`;if(m)return `${m}分${s}秒`;return `${s}秒`;};
+	const formatTime=(value)=>{if(!value)return t('notAvailable');const ms=normalizeDateMs(value);if(ms===null)return value;return new Date(ms).toLocaleString(locale.value==='zh'?'zh-CN':'en-US');};
+const formatAge=(value)=>{const ms=normalizeDateMs(value);if(ms===null)return t('notAvailable');const seconds=Math.max(0,Math.floor((nowTick.value-ms)/1000));if(seconds<60)return `${seconds} ${t('seconds')}`;if(seconds<3600)return `${Math.floor(seconds/60)} ${t('minutes')}`;if(seconds<86400)return `${Math.floor(seconds/3600)} ${t('hours')}`;return `${Math.floor(seconds/86400)} ${t('days')}`;};
+const formatDuration=(seconds)=>{if(!seconds)return '-';const h=Math.floor(seconds/3600);const m=Math.floor((seconds%3600)/60);const s=seconds%60;if(h)return `${h}${t('hours')}${m}${t('minutes')}`;if(m)return `${m}${t('minutes')}${s}${t('seconds')}`;return `${s}${t('seconds')}`;};
 	const onGlobalKeydown=(event)=>{if(event.key==='Escape'){showDeviceDetailModal.value=false;showAssetModal.value=false;showSettingsModal.value=false;closeBulkDeleteConfirm();closeSnapshotRestore();return;}if(event.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)){event.preventDefault();searchInput.value?.focus();}};
-	onMounted(async()=>{document.body.classList.toggle('light',theme.value==='light');document.addEventListener('keydown',onGlobalKeydown);document.addEventListener('fullscreenchange',onFullscreenChange);window.addEventListener('online',onConnectionChange);window.addEventListener('offline',onConnectionChange);if(adminToken.value){await refreshDashboard();try{weakAdminPassword.value=(await apiJson('/api/security-status',{headers:authHeaders()})).weak_admin_password;}catch(e){}}else loadingDevices.value=false;timer=setInterval(refreshDashboard,10000);clockTimer=setInterval(()=>nowTick.value=Date.now(),1000);});
+	onMounted(async()=>{document.documentElement.lang=locale.value==='zh'?'zh-CN':'en';document.body.classList.toggle('light',theme.value==='light');document.addEventListener('keydown',onGlobalKeydown);document.addEventListener('fullscreenchange',onFullscreenChange);window.addEventListener('online',onConnectionChange);window.addEventListener('offline',onConnectionChange);if(adminToken.value){await refreshDashboard();try{weakAdminPassword.value=(await apiJson('/api/security-status',{headers:authHeaders()})).weak_admin_password;}catch(e){}}else loadingDevices.value=false;timer=setInterval(refreshDashboard,10000);clockTimer=setInterval(()=>nowTick.value=Date.now(),1000);});
 	onBeforeUnmount(()=>{document.removeEventListener('keydown',onGlobalKeydown);document.removeEventListener('fullscreenchange',onFullscreenChange);window.removeEventListener('online',onConnectionChange);window.removeEventListener('offline',onConnectionChange);clearTimeout(searchDebounceTimer);clearTimeout(toastTimer);if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);});
-		return {recycleBin,openRecycleTab,restoreRecycleEntry,devices,summary,riskDevices,error,loadingDevices,networkConnected,theme,wallMode,toggleTheme,toggleWallMode,engineReady,stateCounts,offlineTop,adminToken,authRole,weakAdminPassword,showAuthModal,loginInput,showSettingsModal,settingsTab,settings,settingsMsg,settingsErr,authError,adminUser,adminPass,restoreFile,isTriggering,isBulkUpdating,bulkMode,selectedDeviceIds,bulkGroupName,bulkProbeInterval,showBulkDeleteModal,bulkDeleteConfirmation,showSnapshotRestoreModal,snapshotRestoreRows,selectedSnapshotRows,isRestoringSnapshot,showAssetModal,showDeviceDetailModal,deviceDetail,trendWindow,selectedTrend,maintenanceUntilLocal,maintenanceNote,assetTab,assetShowValidation,assetFormErrors,bulkText,bulkPreview,previewBulkImport,downloadBulkTemplate,downloadBulkErrors,assetForm,toast,selectedGroup,statusFilter,keyword,sortMode,viewMode,currentPage,pageSize,pageCount,visibleDevices,searchInput,logs,logLevel,logCategory,logKeyword,auditTimeline,auditKeyword,auditDeviceId,auditAction,deleteSnapshots,snapshotKeyword,snapshotOperator,snapshotStart,snapshotEnd,alerts,alertType,alertDeviceId,groupPolicies,policyForm,selectedPolicy,notificationChannels,groupRoutes,notificationDeliveries,channelForm,channelTestResult,routeGroupName,routeChannelIds,deliveryStatus,deliveryChannelId,channelEndpointPlaceholder,groups,groupStats,filteredDevices,totalCount,onlineCount,offlineCount,unknownCount,pausedCount,statusText,auditActionText,probeTypeText,channelTypeText,deliveryKindText,deliverySummary,endpointPreview,trendMetrics,trendHeight,trendClass,metricTitle,displayStatus,statusBadgeName,deviceClass,isStale,showProbeCountdown,probeCountdownPercent,probeCountdownText,probeStripClass,formatTime,formatAge,formatDuration,loginAdmin,logoutAdmin,openSettings,triggerMonitorNow,toggleBulkMode,isDeviceSelected,toggleDeviceSelection,selectVisibleDevices,clearBulkSelection,handleDeviceCardClick,bulkPause,bulkStop,bulkUpdateGroup,bulkUpdateProbeInterval,openBulkDeleteConfirm,closeBulkDeleteConfirm,bulkDeleteDevices,openAssetModalForCreate,openAssetModalForEdit,saveSingleAsset,submitBulkImport,deleteDevice,toggleMonitoring,pauseMonitoring,enableMonitoring,stopMonitoring,pauseDetailDevice,enableDetailDevice,stopDetailDevice,editDetailDevice,deleteDetailDevice,openDeviceDetail,probeDetailDevice,setMaintenancePreset,saveMaintenance,clearMaintenance,saveSettings,openPoliciesTab,loadPolicyForm,saveGroupPolicy,deleteGroupPolicy,openChannelsTab,resetChannelForm,loadChannelForm,saveNotificationChannel,testNotificationChannel,deleteNotificationChannel,loadRouteForm,saveGroupRoute,downloadBackup,downloadDevicesCsv,onRestoreFileChange,restoreBackup,fetchLogs,openLogsTab,fetchAuditTimeline,openAuditTab,fetchDeleteSnapshots,openSnapshotsTab,isDeletionSnapshot,downloadLogCsvSnapshot,openSnapshotRestore,closeSnapshotRestore,selectRestorableSnapshotRows,isSnapshotRowSelected,toggleSnapshotRow,restoreSelectedSnapshotRows,fetchAlerts,openAlertsTab,fetchNotificationDeliveries};
+		return {locale,t,toggleLocale,recycleBin,openRecycleTab,restoreRecycleEntry,devices,summary,riskDevices,error,loadingDevices,networkConnected,theme,wallMode,toggleTheme,toggleWallMode,engineReady,stateCounts,offlineTop,adminToken,authRole,weakAdminPassword,showAuthModal,loginInput,showSettingsModal,settingsTab,settings,settingsMsg,settingsErr,authError,adminUser,adminPass,restoreFile,isTriggering,isBulkUpdating,bulkMode,selectedDeviceIds,bulkGroupName,bulkProbeInterval,showBulkDeleteModal,bulkDeleteConfirmation,showSnapshotRestoreModal,snapshotRestoreRows,selectedSnapshotRows,isRestoringSnapshot,showAssetModal,showDeviceDetailModal,deviceDetail,trendWindow,selectedTrend,maintenanceUntilLocal,maintenanceNote,assetTab,assetShowValidation,assetFormErrors,bulkText,bulkPreview,previewBulkImport,downloadBulkTemplate,downloadBulkErrors,assetForm,toast,selectedGroup,statusFilter,keyword,sortMode,viewMode,currentPage,pageSize,pageCount,visibleDevices,searchInput,logs,logLevel,logCategory,logKeyword,auditTimeline,auditKeyword,auditDeviceId,auditAction,deleteSnapshots,snapshotKeyword,snapshotOperator,snapshotStart,snapshotEnd,alerts,alertType,alertDeviceId,groupPolicies,policyForm,selectedPolicy,notificationChannels,groupRoutes,notificationDeliveries,channelForm,channelTestResult,routeGroupName,routeChannelIds,deliveryStatus,deliveryChannelId,channelEndpointPlaceholder,groups,groupStats,filteredDevices,totalCount,onlineCount,offlineCount,unknownCount,pausedCount,statusText,auditActionText,probeTypeText,channelTypeText,deliveryKindText,deliverySummary,endpointPreview,trendMetrics,trendHeight,trendClass,metricTitle,displayStatus,statusBadgeName,deviceClass,isStale,showProbeCountdown,probeCountdownPercent,probeCountdownText,probeStripClass,formatTime,formatAge,formatDuration,loginAdmin,logoutAdmin,openSettings,triggerMonitorNow,toggleBulkMode,isDeviceSelected,toggleDeviceSelection,selectVisibleDevices,clearBulkSelection,handleDeviceCardClick,bulkPause,bulkStop,bulkUpdateGroup,bulkUpdateProbeInterval,openBulkDeleteConfirm,closeBulkDeleteConfirm,bulkDeleteDevices,openAssetModalForCreate,openAssetModalForEdit,saveSingleAsset,submitBulkImport,deleteDevice,toggleMonitoring,pauseMonitoring,enableMonitoring,stopMonitoring,pauseDetailDevice,enableDetailDevice,stopDetailDevice,editDetailDevice,deleteDetailDevice,openDeviceDetail,probeDetailDevice,setMaintenancePreset,saveMaintenance,clearMaintenance,saveSettings,openPoliciesTab,loadPolicyForm,saveGroupPolicy,deleteGroupPolicy,openChannelsTab,resetChannelForm,loadChannelForm,saveNotificationChannel,testNotificationChannel,deleteNotificationChannel,loadRouteForm,saveGroupRoute,downloadBackup,downloadDevicesCsv,onRestoreFileChange,restoreBackup,fetchLogs,openLogsTab,fetchAuditTimeline,openAuditTab,fetchDeleteSnapshots,openSnapshotsTab,isDeletionSnapshot,downloadLogCsvSnapshot,openSnapshotRestore,closeSnapshotRestore,selectRestorableSnapshotRows,isSnapshotRowSelected,toggleSnapshotRow,restoreSelectedSnapshotRows,fetchAlerts,openAlertsTab,fetchNotificationDeliveries};
 }
 }).mount('#app');
 </script>
