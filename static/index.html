@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NetSentinel Pro</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <style>
     /* Hallmark · pre-emit critique: P4 H5 E4 S5 R4 V4 */
@@ -70,6 +71,12 @@
     h1 { margin: 0; font-size: clamp(26px, 4vw, 48px); line-height: 1; font-weight: 760; letter-spacing: 0; overflow-wrap: anywhere; }
     .subtitle { margin: 8px 0 0; color: var(--color-muted); font-size: 13px; }
     .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .overview { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:8px; margin-top:12px; }
+    .overview-item { border:1px solid var(--color-line); border-radius:var(--radius); background:var(--color-panel); padding:10px 12px; min-height:64px; }
+    .overview-item strong { display:block; margin-top:3px; font-size:19px; }
+    .overview-item small { color:var(--color-muted); }
+    .overview-item.health { grid-column:span 2; }
+    .overview-item.health strong { font-size:13px; }
     .btn {
       min-height: 36px;
       border: 1px solid var(--color-line-strong);
@@ -201,7 +208,7 @@
     .input:focus, .select:focus, .textarea:focus { border-color: var(--color-accent); box-shadow: 0 0 0 2px rgba(88,216,255,.16); }
     .device-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
       gap: 12px;
       padding: 14px;
       max-height: none;
@@ -209,8 +216,8 @@
     }
     .device {
       position: relative;
-      min-height: 162px;
-      aspect-ratio: 1 / 1;
+      min-height: 216px;
+      aspect-ratio: auto;
       border: 1px solid var(--color-line);
       border-radius: var(--radius);
       background: var(--color-panel-2);
@@ -224,8 +231,10 @@
     .device.offline { border-color: rgba(255,77,95,.9); background: linear-gradient(180deg, rgba(126,22,35,.98), rgba(45,10,18,.98)); box-shadow: inset 0 0 0 1px rgba(255,77,95,.18), 0 16px 42px rgba(255,77,95,.14); }
     .device.online { border-color: rgba(62,229,143,.34); }
     .device.unknown { border-color: rgba(255,200,87,.34); }
-    .device.paused { opacity: .58; filter: grayscale(.25); }
-    .device.stopped { opacity: .46; filter: grayscale(.45); border-style: dashed; }
+    .device.suspect { border-color:rgba(255,200,87,.85); background:linear-gradient(180deg,rgba(82,53,15,.75),var(--color-panel-2)); }
+    .device.stale { outline:2px dashed #f6c463; outline-offset:-5px; }
+    .device.paused { border-color:rgba(255,200,87,.5); background:#171b1f; }
+    .device.stopped { border-color:rgba(154,170,188,.55); border-style:dashed; background:#111922; }
     .device.maintenance { border-color: rgba(255,200,87,.72); box-shadow: inset 0 0 0 1px rgba(255,200,87,.12); }
     .device.selected { border-color: rgba(88,216,255,.9); box-shadow: inset 0 0 0 1px rgba(88,216,255,.35), 0 12px 34px rgba(88,216,255,.12); }
     .probe-strip { position: relative; height: 6px; border-radius: 999px; overflow: hidden; border: 1px solid rgba(88,216,255,.18); background: rgba(255,255,255,.07); margin-bottom: 10px; }
@@ -249,11 +258,23 @@
     .badge.online { color: #bfffdc; border-color: rgba(62,229,143,.55); background: rgba(62,229,143,.12); }
     .badge.offline { color: #ffd1d7; border-color: rgba(255,77,95,.62); background: rgba(255,77,95,.16); }
     .badge.unknown { color: #ffe3a3; border-color: rgba(255,200,87,.55); background: rgba(255,200,87,.12); }
+    .badge.suspect { color:#ffe4a8; border-color:#ffc857; background:rgba(255,200,87,.17); }
     .badge.maintenance { color: #ffe3a3; border-color: rgba(255,200,87,.72); background: rgba(255,200,87,.16); }
     .badge.paused { color: #ffe3a3; border-color: rgba(255,200,87,.55); background: rgba(255,200,87,.12); }
     .badge.stopped { color: #d4deea; border-color: rgba(154,170,188,.44); background: rgba(154,170,188,.1); }
     .meta { margin: 9px 0 0; display: grid; gap: 5px; color: var(--color-muted); font-size: 12px; }
     .device .meta { overflow: hidden; }
+    .device .meta span { overflow-wrap:anywhere; }
+    .device .failure-reason { color:#ffd1d7; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+    .stale-label { color:#ffe3a3; font-weight:700; }
+    .view-controls { display:flex; flex-wrap:wrap; gap:8px; padding:0 12px 12px; align-items:center; }
+    .view-controls .select { width:auto; min-width:125px; }
+    .view-controls .btn { min-height:34px; }
+    .pagination { display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:8px; padding:12px; border-top:1px solid var(--color-line); }
+    .device-table-row { cursor:pointer; }
+    .device-table-row:hover { background:var(--color-panel-3); }
+    .device-table-row td { white-space:normal; overflow-wrap:anywhere; }
+    :focus-visible { outline:2px solid var(--color-accent-2); outline-offset:2px; }
     .mono { font-family: var(--font-mono); color: var(--color-text); }
     .device-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
     .device-tools .wide { grid-column: span 2; }
@@ -393,11 +414,18 @@
     }
     .toast.error { border-color: rgba(255,77,95,.7); color: #ffced4; }
     @media (max-width: 1180px) {
+      .overview { grid-template-columns:repeat(4,minmax(0,1fr)); }
       .layout > aside.panel .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .right-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .device-grid { max-height: none; }
     }
     @media (max-width: 760px) {
+      .overview { display:flex; overflow-x:auto; scroll-snap-type:x mandatory; padding-bottom:3px; }
+      .overview-item { flex:0 0 135px; min-height:62px; scroll-snap-align:start; }
+      .overview-item.health { flex-basis:160px; }
+      .device-grid { grid-template-columns:repeat(auto-fill,minmax(145px,1fr)); gap:8px; padding:8px; }
+      .device { aspect-ratio:auto; min-height:180px; }
+      .view-controls .select { flex:1 1 140px; }
       .shell { padding: 10px; }
       .topbar, .layout, .toolbar, .bulk-bar, .right-stack { grid-template-columns: 1fr; }
       .layout > aside.panel .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -428,6 +456,15 @@
         <button v-if="adminToken" class="btn" @click="logoutAdmin">退出</button>
       </div>
     </header>
+
+    <section class="overview" aria-label="监控状态概览" v-if="adminToken">
+      <div class="overview-item"><small>在线</small><strong class="msg">● {{ stateCounts.online }}</strong></div>
+      <div class="overview-item"><small>离线</small><strong class="err">■ {{ stateCounts.offline }}</strong></div>
+      <div class="overview-item"><small>疑似异常</small><strong style="color:var(--color-warn)">▲ {{ stateCounts.suspect }}</strong></div>
+      <div class="overview-item"><small>待确认</small><strong>○ {{ stateCounts.pending }}</strong></div>
+      <div class="overview-item"><small>维护 / 暂停 / 停止</small><strong>{{ stateCounts.maintenance }} / {{ stateCounts.paused }} / {{ stateCounts.stopped }}</strong></div>
+      <div class="overview-item health"><small>监控引擎</small><strong :class="engineReady ? 'msg' : 'err'">{{ engineReady ? '● 正常运行' : '▲ 待检查' }}</strong><small>当前离线：{{ offlineTop.join('、') || '无' }}</small></div>
+    </section>
 
     <section class="layout">
       <aside class="panel">
@@ -475,14 +512,29 @@
           <button v-for="g in groupStats" :key="g.name" class="group-tab" :class="{active:selectedGroup===g.name}" @click="selectedGroup=g.name">{{ g.name }} {{ g.total }}</button>
         </div>
         <div class="toolbar">
-          <input v-model="keyword" class="input" placeholder="搜索设备名称或 IP" />
+          <input v-model="keyword" class="input" aria-label="搜索设备名称或 IP" placeholder="搜索设备名称或 IP，按 / 快速聚焦" ref="searchInput" />
           <select v-model="statusFilter" class="select">
             <option value="">全部状态</option>
             <option value="OFFLINE">只看离线</option>
-            <option value="UNKNOWN">只看未知</option>
+            <option value="SUSPECT">只看疑似异常</option>
+            <option value="PENDING">只看待确认</option>
             <option value="ONLINE">只看在线</option>
-            <option value="PAUSED">只看暂停/停止</option>
+            <option value="MAINTENANCE">只看维护</option>
+            <option value="PAUSED">只看暂停</option>
+            <option value="STOPPED">只看停止</option>
           </select>
+        </div>
+        <div class="view-controls">
+          <label class="panel-note" for="sort-mode">排序</label>
+          <select id="sort-mode" v-model="sortMode" class="select">
+            <option value="status">状态（离线置顶）</option>
+            <option value="name">名称</option>
+            <option value="latency">延迟</option>
+            <option value="changed">最近变化</option>
+          </select>
+          <button class="btn" :aria-pressed="viewMode==='cards'" @click="viewMode='cards'">卡片</button>
+          <button class="btn" :aria-pressed="viewMode==='table'" @click="viewMode='table'">表格</button>
+          <span class="panel-note">每页 {{ pageSize }} 台 · 共 {{ filteredDevices.length }} 台</span>
         </div>
         <div v-if="bulkMode" class="bulk-bar">
           <button class="btn" @click="selectVisibleDevices">选择当前可见</button>
@@ -499,8 +551,8 @@
           <span class="panel-note">已选 {{ selectedDeviceIds.length }} 台</span>
         </div>
         <div v-if="error" class="err" style="padding: 12px;">{{ error }}</div>
-        <div class="device-grid">
-          <article v-for="device in filteredDevices" :key="device.id" class="device" :class="deviceClass(device)" @click="handleDeviceCardClick(device)">
+        <div v-if="viewMode==='cards'" class="device-grid">
+          <article v-for="device in visibleDevices" :key="device.id" class="device" :class="deviceClass(device)" @click="handleDeviceCardClick(device)" @keydown.enter="handleDeviceCardClick(device)" tabindex="0" :aria-label="`${device.name}，${displayStatus(device)}，${device.ip_address}`">
             <input v-if="bulkMode" class="bulk-select" type="checkbox" :checked="isDeviceSelected(device.id)" @click.stop="toggleDeviceSelection(device.id)" />
             <div class="probe-strip" :class="probeStripClass(device)" :title="probeCountdownText(device)" v-if="showProbeCountdown(device)">
               <div class="probe-strip-fill" :style="{ width: probeCountdownPercent(device) + '%' }"></div>
@@ -514,12 +566,32 @@
             <div class="meta">
               <span>地址 <span class="mono">{{ device.ip_address }}</span></span>
               <span>探测 {{ probeTypeText(device.probe_type) }}{{ device.probe_port ? `:${device.probe_port}` : '' }}</span>
+              <span v-if="device.probe_path">路径 <span class="mono">{{ device.probe_path }}</span></span>
               <span v-if="device.in_maintenance">维护至 {{ formatTime(device.maintenance_until) }}</span>
-              <span>时间 {{ formatTime(device.latest_event_time) }}</span>
+              <span v-if="device.latest_event_time">状态持续 {{ formatAge(device.latest_event_time) }}</span>
+              <span>最近成功 {{ formatTime(device.last_success_at) }}</span>
+              <span v-if="device.last_error" class="failure-reason" :title="device.last_error">原因 {{ device.last_error }}</span>
+              <span v-if="isStale(device)" class="stale-label">▲ 数据过期 · 最近探测 {{ formatTime(device.latest_probe_time) }}</span>
             </div>
           </article>
-          <div v-if="!filteredDevices.length" class="empty">没有匹配的设备</div>
+          <div v-if="!filteredDevices.length" class="empty">{{ devices.length ? '没有匹配的设备，请调整筛选条件。' : '还没有监控目标。点击“添加设备”创建第一个目标。' }}</div>
         </div>
+        <div v-else class="table-wrap" style="margin:12px;">
+          <table aria-label="监控目标表格"><thead><tr><th>设备</th><th>地址 / 探测</th><th>状态</th><th>状态持续</th><th>最近成功</th><th>失败原因</th></tr></thead>
+          <tbody>
+            <tr v-for="device in visibleDevices" :key="device.id" class="device-table-row" tabindex="0" @click="handleDeviceCardClick(device)" @keydown.enter="handleDeviceCardClick(device)">
+              <td>{{ device.name }}</td><td class="mono">{{ device.ip_address }} · {{ probeTypeText(device.probe_type) }}{{ device.probe_port ? `:${device.probe_port}` : device.probe_path }}</td>
+              <td><span class="badge" :class="statusBadgeName(device)">{{ displayStatus(device) }}</span><span v-if="isStale(device)" class="stale-label"> 数据过期</span></td>
+              <td>{{ formatAge(device.latest_event_time) }}</td><td>{{ formatTime(device.last_success_at) }}</td><td>{{ device.last_error || '-' }}</td>
+            </tr>
+            <tr v-if="!filteredDevices.length"><td colspan="6" class="empty">没有匹配的设备</td></tr>
+          </tbody></table>
+        </div>
+        <nav v-if="pageCount>1" class="pagination" aria-label="设备分页">
+          <button class="btn" :disabled="currentPage<=1" @click="currentPage--">上一页</button>
+          <span>第 {{ currentPage }} / {{ pageCount }} 页</span>
+          <button class="btn" :disabled="currentPage>=pageCount" @click="currentPage++">下一页</button>
+        </nav>
       </main>
 
       <aside class="right-stack">
@@ -1030,13 +1102,16 @@
   </div>
 
 <script>
-const { createApp, ref, computed, onMounted, onBeforeUnmount } = Vue;
+const { createApp, ref, computed, watch, onMounted, onBeforeUnmount } = Vue;
 createApp({
 setup() {
+const savedView=(()=>{try{return JSON.parse(localStorage.getItem('netsentinel_view')||'{}')}catch{return {}}})();
+const hashView=new URLSearchParams(location.hash.slice(1));
 const devices = ref([]);
 const summary = ref({ alerts_24h:0, offline_alerts_24h:0, uptime_percent_7d:100, paused_devices:0, generated_at:null });
 const riskDevices = ref([]);
 const error = ref('');
+const engineReady = ref(false);
 const adminToken = ref(sessionStorage.getItem('admin_token') || '');
 const authRole = ref(sessionStorage.getItem('auth_role') || 'admin');
 const weakAdminPassword = ref(false);
@@ -1067,9 +1142,15 @@ const assetTab = ref('single');
 const bulkText = ref('');
 	const assetForm = ref({ id:null, name:'', ip_address:'', group_name:'default', is_monitoring:true, monitoring_state:'ACTIVE', probe_type:'ICMP', probe_port:null, probe_path:'', expected_status:null, probe_interval_seconds:null });
 const toast = ref({ show:false, type:'success', message:'' });
-const selectedGroup = ref('__ALL__');
-const statusFilter = ref('');
-const keyword = ref('');
+const selectedGroup = ref(hashView.get('group')||savedView.group||'__ALL__');
+const statusFilter = ref(hashView.get('status')||savedView.status||'');
+const keyword = ref(hashView.get('q')||'');
+const debouncedKeyword = ref(keyword.value);
+const sortMode = ref(hashView.get('sort')||savedView.sort||'status');
+const viewMode = ref(hashView.get('view')||savedView.view||'cards');
+const currentPage = ref(1);
+const pageSize = 60;
+const searchInput = ref(null);
 const logs = ref([]);
 const logLevel = ref('');
 const logCategory = ref('');
@@ -1108,7 +1189,8 @@ const channelForm = ref({ id:null, name:'', channel_type:'FEISHU', endpoint:'', 
 const showToast=(message,type='success')=>{toast.value={show:true,type,message};setTimeout(()=>toast.value.show=false,2500)};
 const authHeaders=()=>({Authorization:`Bearer ${adminToken.value}`});
 const apiJson=async(url,options={})=>{const r=await fetch(url,options);const b=await r.json().catch(()=>({}));if(!r.ok){if(r.status===401 && url!=='/api/auth/login'){adminToken.value='';sessionStorage.removeItem('admin_token');sessionStorage.removeItem('auth_role');showAuthModal.value=true;}const err=new Error(b.detail||`请求失败: ${r.status}`);err.status=r.status;throw err;}return b;};
-const refreshDashboard=async()=>{if(!adminToken.value)return;await Promise.all([fetchDevices(), fetchSummary(), fetchRiskDevices()]); await fetchAlerts(true);};
+const refreshDashboard=async()=>{if(!adminToken.value)return;await Promise.all([fetchDevices(), fetchSummary(), fetchRiskDevices(), fetchReadiness()]); await fetchAlerts(true);};
+const fetchReadiness=async()=>{try{const response=await fetch('/health/ready',{cache:'no-store'});engineReady.value=response.ok;}catch{engineReady.value=false;}};
 const fetchDevices=async()=>{try{devices.value=await apiJson('/api/devices',{headers:authHeaders(),cache:'no-store'});error.value='';}catch(e){error.value=`加载设备失败: ${e.message}`;}};
 const fetchSummary=async()=>{try{summary.value=await apiJson('/api/summary',{headers:authHeaders()});}catch(e){}};
 const fetchRiskDevices=async()=>{try{riskDevices.value=await apiJson('/api/risk-devices',{headers:authHeaders()});}catch(e){riskDevices.value=[];}};
@@ -1125,7 +1207,7 @@ const openSettings=async()=>{if(!adminToken.value){showAuthModal.value=true;retu
 	const clearBulkSelection=()=>{selectedDeviceIds.value=[];};
 	const toggleBulkMode=()=>{if(!adminToken.value){showAuthModal.value=true;return;}bulkMode.value=!bulkMode.value;if(!bulkMode.value){clearBulkSelection();closeBulkDeleteConfirm();}};
 	const toggleDeviceSelection=(id)=>{selectedDeviceIds.value=isDeviceSelected(id)?selectedDeviceIds.value.filter(x=>x!==id):[...selectedDeviceIds.value,id];};
-	const selectVisibleDevices=()=>{selectedDeviceIds.value=filteredDevices.value.map(d=>d.id);};
+	const selectVisibleDevices=()=>{selectedDeviceIds.value=visibleDevices.value.map(d=>d.id);};
 	const handleDeviceCardClick=(device)=>{if(bulkMode.value){toggleDeviceSelection(device.id);return;}openDeviceDetail(device.id);};
 	const bulkUpdateDevices=async(payload,successText)=>{if(!adminToken.value||isBulkUpdating.value)return;if(!selectedDeviceIds.value.length){showToast('请先选择设备','error');return;}isBulkUpdating.value=true;try{const body={device_ids:selectedDeviceIds.value,...payload};const result=await apiJson('/api/devices/bulk-update',{method:'PUT',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});await refreshDashboard();showToast(`${successText}: ${result.updated} 台`);}catch(e){if(e.status===401){adminToken.value='';sessionStorage.removeItem('admin_token');showAuthModal.value=true;}showToast(e.message,'error');}finally{isBulkUpdating.value=false;}};
 	const bulkPause=()=>bulkUpdateDevices({monitoring_state:'PAUSED'},'批量暂停完成');
@@ -1198,14 +1280,24 @@ const restoreSelectedSnapshotRows=async()=>{if(!snapshotRestoreLog.value||!selec
 const fetchAlerts=async(silent=false)=>{if(!adminToken.value)return;const params=new URLSearchParams();if(alertType.value)params.set('event_type',alertType.value);if(alertDeviceId.value)params.set('device_id',alertDeviceId.value);try{alerts.value=await apiJson(`/api/alerts?${params.toString()}`,{headers:authHeaders()});}catch(e){if(!silent)showToast(e.message,'error');}};
 const openAlertsTab=async()=>{settingsTab.value='alerts';await fetchAlerts();};
 const groups=computed(()=>Array.from(new Set(devices.value.map(d=>d.group_name||'default'))).sort());
-	const groupStats=computed(()=>groups.value.map(name=>{const rows=devices.value.filter(d=>(d.group_name||'default')===name);const total=rows.length;const online=rows.filter(d=>d.latest_status==='ONLINE'&&d.monitoring_state==='ACTIVE').length;const offline=rows.filter(d=>d.latest_status==='OFFLINE'&&d.monitoring_state==='ACTIVE').length;const unknown=rows.filter(d=>d.latest_status==='UNKNOWN'&&d.monitoring_state==='ACTIVE').length;const paused=rows.filter(d=>d.monitoring_state!=='ACTIVE').length;return {name,total,online,offline,unknown,paused,ratio:total?Math.round((online/total)*100):0};}).sort((a,b)=>b.offline-a.offline || a.name.localeCompare(b.name)));
-	const deviceSortRank=(d)=>{if(d.monitoring_state==='PAUSED')return 3;if(d.monitoring_state==='STOPPED')return 4;const order={OFFLINE:0,UNKNOWN:1,ONLINE:2};return order[d.latest_status]??5;};
-	const filteredDevices=computed(()=>{const kw=keyword.value.trim().toLowerCase();let base=selectedGroup.value==='__ALL__'?devices.value:devices.value.filter(d=>(d.group_name||'default')===selectedGroup.value);if(statusFilter.value==='PAUSED')base=base.filter(d=>d.monitoring_state!=='ACTIVE');else if(statusFilter.value)base=base.filter(d=>d.latest_status===statusFilter.value && d.monitoring_state==='ACTIVE');if(kw)base=base.filter(d=>`${d.name} ${d.ip_address} ${d.group_name}`.toLowerCase().includes(kw));return [...base].sort((a,b)=>{const ao=deviceSortRank(a);const bo=deviceSortRank(b);if(ao!==bo)return ao-bo;return a.id-b.id;});});
+const groupStats=computed(()=>{const byGroup=new Map();for(const device of devices.value){const name=device.group_name||'default';if(!byGroup.has(name))byGroup.set(name,{name,total:0,online:0,offline:0,unknown:0,paused:0,ratio:0});const group=byGroup.get(name);group.total++;const kind=statusKind(device);if(kind==='ONLINE')group.online++;else if(kind==='OFFLINE')group.offline++;else if(kind==='PENDING'||kind==='SUSPECT')group.unknown++;else if(kind==='PAUSED'||kind==='STOPPED')group.paused++;}return [...byGroup.values()].map(group=>({...group,ratio:Math.round(group.online/group.total*100)})).sort((a,b)=>b.offline-a.offline||a.name.localeCompare(b.name));});
+const isStale=(d)=>d.monitoring_state==='ACTIVE'&&!!d.latest_probe_time&&nowTick.value-normalizeDateMs(d.latest_probe_time)>3*1000*(d.probe_interval_seconds||30);
+const statusKind=(d)=>{if(d.monitoring_state==='STOPPED')return 'STOPPED';if(d.monitoring_state==='PAUSED')return 'PAUSED';if(d.in_maintenance)return 'MAINTENANCE';if(d.latest_status==='OFFLINE')return 'OFFLINE';if(d.failure_streak>0)return 'SUSPECT';if(d.latest_status==='ONLINE')return 'ONLINE';return 'PENDING';};
+const stateCounts=computed(()=>{const counts={online:0,offline:0,suspect:0,pending:0,maintenance:0,paused:0,stopped:0};for(const device of devices.value)counts[statusKind(device).toLowerCase()]++;return counts;});
+const offlineTop=computed(()=>devices.value.filter(device=>statusKind(device)==='OFFLINE').sort((a,b)=>(normalizeDateMs(a.latest_event_time)||0)-(normalizeDateMs(b.latest_event_time)||0)).slice(0,3).map(device=>device.name));
+const deviceSortRank=(d)=>({OFFLINE:0,SUSPECT:1,PENDING:2,MAINTENANCE:3,ONLINE:4,PAUSED:5,STOPPED:6}[statusKind(d)]??7);
+const filteredDevices=computed(()=>{const kw=debouncedKeyword.value.trim().toLowerCase();let base=selectedGroup.value==='__ALL__'?devices.value:devices.value.filter(d=>(d.group_name||'default')===selectedGroup.value);if(statusFilter.value)base=base.filter(d=>statusKind(d)===statusFilter.value);if(kw)base=base.filter(d=>`${d.name} ${d.ip_address} ${d.group_name} ${d.probe_path}`.toLowerCase().includes(kw));return [...base].sort((a,b)=>{const offlineRank=Number(statusKind(b)==='OFFLINE')-Number(statusKind(a)==='OFFLINE');if(offlineRank)return offlineRank;if(sortMode.value==='name')return a.name.localeCompare(b.name,'zh-CN')||a.id-b.id;if(sortMode.value==='latency')return (a.last_latency_ms??Infinity)-(b.last_latency_ms??Infinity)||a.id-b.id;if(sortMode.value==='changed')return (normalizeDateMs(b.latest_event_time)||0)-(normalizeDateMs(a.latest_event_time)||0)||a.id-b.id;const rank=deviceSortRank(a)-deviceSortRank(b);return rank||a.id-b.id;});});
+const pageCount=computed(()=>Math.max(1,Math.ceil(filteredDevices.value.length/pageSize)));
+const visibleDevices=computed(()=>filteredDevices.value.slice((currentPage.value-1)*pageSize,currentPage.value*pageSize));
+let searchDebounceTimer=null;
+watch(keyword,value=>{clearTimeout(searchDebounceTimer);searchDebounceTimer=setTimeout(()=>{debouncedKeyword.value=value;},180);});
+watch([selectedGroup,statusFilter,sortMode,viewMode,debouncedKeyword],()=>{currentPage.value=1;const view={group:selectedGroup.value,status:statusFilter.value,sort:sortMode.value,view:viewMode.value};localStorage.setItem('netsentinel_view',JSON.stringify(view));const params=new URLSearchParams({...view,q:debouncedKeyword.value});history.replaceState(null,'',`${location.pathname}${location.search}#${params}`);});
+watch(pageCount,count=>{if(currentPage.value>count)currentPage.value=count;});
 const totalCount=computed(()=>devices.value.length);
-const onlineCount=computed(()=>devices.value.filter(d=>d.latest_status==='ONLINE').length);
-const offlineCount=computed(()=>devices.value.filter(d=>d.latest_status==='OFFLINE').length);
-const unknownCount=computed(()=>devices.value.filter(d=>d.latest_status==='UNKNOWN').length);
-	const pausedCount=computed(()=>devices.value.filter(d=>d.monitoring_state!=='ACTIVE').length);
+const onlineCount=computed(()=>stateCounts.value.online);
+const offlineCount=computed(()=>stateCounts.value.offline);
+const unknownCount=computed(()=>stateCounts.value.pending+stateCounts.value.suspect);
+	const pausedCount=computed(()=>stateCounts.value.paused+stateCounts.value.stopped);
 const channelEndpointPlaceholder=computed(()=>{if(channelForm.value.channel_type==='EMAIL')return '收件人邮箱，多个用逗号分隔；SMTP 使用环境变量配置';if(channelForm.value.channel_type==='WEBHOOK')return 'https://example.com/webhook';return '机器人 Webhook 地址';});
 const statusText=(s)=>s==='ONLINE'?'在线':(s==='OFFLINE'?'离线':'未知');
 const auditActionText=(action)=>({CREATE:'新增',BULK_CREATE:'批量导入',UPDATE:'编辑',PAUSE:'暂停',STOP:'停止',ENABLE:'启用',BULK_UPDATE:'批量编辑',BULK_PAUSE:'批量暂停',BULK_STOP:'批量停止',BULK_ENABLE:'批量启用',DELETE:'删除',BULK_DELETE:'批量删除',RESTORE:'恢复',MAINTENANCE:'维护'}[action]||action||'-');
@@ -1218,19 +1310,21 @@ const trendMetrics=(items)=>[...(items||[])].reverse().slice(-30);
 const trendHeight=(metric)=>{if(!metric.success)return '24px';const latency=metric.latency_ms||1;return `${Math.max(10,Math.min(92,Math.round(latency/4)+10))}px`;};
 const trendClass=(metric)=>({fail:!metric.success,warn:metric.success&&(metric.latency_ms||0)>300});
 const metricTitle=(metric)=>`${formatTime(metric.checked_at)} / ${metric.success?'成功':'失败'} / ${metric.latency_ms??'-'}ms${metric.http_status?` / HTTP ${metric.http_status}`:''}${metric.error?` / ${metric.error}`:''}`;
-	const displayStatus=(d)=>{if(d.in_maintenance)return '维护';if(d.monitoring_state==='STOPPED')return '停止';if(d.monitoring_state==='PAUSED')return '暂停';return statusText(d.latest_status);};
-	const statusBadgeName=(d)=>{if(typeof d!=='string'&&d.in_maintenance)return 'maintenance';if(typeof d!=='string'&&d.monitoring_state==='STOPPED')return 'stopped';if(typeof d!=='string'&&d.monitoring_state==='PAUSED')return 'paused';const status=typeof d==='string'?d:d.latest_status; if(status==='ONLINE')return 'online'; if(status==='OFFLINE')return 'offline'; return 'unknown';};
-		const deviceClass=(d)=>({online:d.latest_status==='ONLINE'&&d.monitoring_state==='ACTIVE',offline:d.latest_status==='OFFLINE'&&d.monitoring_state==='ACTIVE',unknown:d.latest_status==='UNKNOWN'&&d.monitoring_state==='ACTIVE',paused:d.monitoring_state==='PAUSED',stopped:d.monitoring_state==='STOPPED',maintenance:d.in_maintenance,selected:isDeviceSelected(d.id),'bulk-mode':bulkMode.value});
+const displayStatus=(d)=>{const kind=statusKind(d);return {ONLINE:'● 在线',OFFLINE:'■ 离线',SUSPECT:`▲ 疑似异常 ${d.failure_streak}/${d.offline_threshold||3}`,PENDING:'○ 待确认',MAINTENANCE:'◆ 维护中',PAUSED:'Ⅱ 已暂停',STOPPED:'■ 已停止'}[kind];};
+const statusBadgeName=(d)=>typeof d==='string'?(d==='ONLINE'?'online':d==='OFFLINE'?'offline':'unknown'):statusKind(d).toLowerCase();
+const deviceClass=(d)=>({online:statusKind(d)==='ONLINE',offline:statusKind(d)==='OFFLINE',suspect:statusKind(d)==='SUSPECT',unknown:statusKind(d)==='PENDING',paused:statusKind(d)==='PAUSED',stopped:statusKind(d)==='STOPPED',maintenance:statusKind(d)==='MAINTENANCE',stale:isStale(d),selected:isDeviceSelected(d.id),'bulk-mode':bulkMode.value});
 	const normalizeDateMs=(value)=>{if(!value)return null;const normalized=/([zZ]|[+-]\d{2}:\d{2})$/.test(value)?value:(value+'Z');const ms=new Date(normalized).getTime();return Number.isNaN(ms)?null:ms;};
 	const showProbeCountdown=(d)=>d.monitoring_state==='ACTIVE';
 	const probeCountdownPercent=(d)=>{if(!showProbeCountdown(d))return 0;const start=normalizeDateMs(d.latest_probe_time);const due=normalizeDateMs(d.next_probe_due_at);if(!start||!due||due<=start)return 0;const remaining=Math.max(0,due-nowTick.value);return Math.max(0,Math.min(100,Math.round((remaining/(due-start))*100)));};
 	const probeCountdownText=(d)=>{if(!showProbeCountdown(d))return '';const due=normalizeDateMs(d.next_probe_due_at);if(!due)return '等待首次探测';const seconds=Math.ceil((due-nowTick.value)/1000);return seconds<=0?'即将探测':`下次探测 ${seconds}秒`;};
 	const probeStripClass=(d)=>showProbeCountdown(d)?statusBadgeName(d):'idle';
 	const formatTime=(value)=>{if(!value)return '暂无';const ms=normalizeDateMs(value);if(ms===null)return value;return new Date(ms).toLocaleString();};
+const formatAge=(value)=>{const ms=normalizeDateMs(value);if(ms===null)return '暂无';const seconds=Math.max(0,Math.floor((nowTick.value-ms)/1000));if(seconds<60)return `${seconds} 秒`;if(seconds<3600)return `${Math.floor(seconds/60)} 分`;if(seconds<86400)return `${Math.floor(seconds/3600)} 小时`;return `${Math.floor(seconds/86400)} 天`;};
 const formatDuration=(seconds)=>{if(!seconds)return '-';const h=Math.floor(seconds/3600);const m=Math.floor((seconds%3600)/60);const s=seconds%60;if(h)return `${h}小时${m}分`;if(m)return `${m}分${s}秒`;return `${s}秒`;};
-	onMounted(async()=>{if(adminToken.value){await refreshDashboard();try{weakAdminPassword.value=(await apiJson('/api/security-status',{headers:authHeaders()})).weak_admin_password;}catch(e){}}timer=setInterval(refreshDashboard,10000);clockTimer=setInterval(()=>nowTick.value=Date.now(),1000);});
-	onBeforeUnmount(()=>{if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);});
-		return {devices,summary,riskDevices,error,adminToken,authRole,weakAdminPassword,showAuthModal,showSettingsModal,settingsTab,settings,settingsMsg,settingsErr,authError,adminUser,adminPass,restoreFile,isTriggering,isBulkUpdating,bulkMode,selectedDeviceIds,bulkGroupName,bulkProbeInterval,showBulkDeleteModal,bulkDeleteConfirmation,showSnapshotRestoreModal,snapshotRestoreRows,selectedSnapshotRows,isRestoringSnapshot,showAssetModal,showDeviceDetailModal,deviceDetail,maintenanceUntilLocal,maintenanceNote,assetTab,bulkText,assetForm,toast,selectedGroup,statusFilter,keyword,logs,logLevel,logCategory,logKeyword,auditTimeline,auditKeyword,auditDeviceId,auditAction,deleteSnapshots,snapshotKeyword,snapshotOperator,snapshotStart,snapshotEnd,alerts,alertType,alertDeviceId,groupPolicies,policyForm,notificationChannels,groupRoutes,notificationDeliveries,channelForm,routeGroupName,routeChannelIds,deliveryStatus,deliveryChannelId,channelEndpointPlaceholder,groups,groupStats,filteredDevices,totalCount,onlineCount,offlineCount,unknownCount,pausedCount,statusText,auditActionText,probeTypeText,channelTypeText,deliveryKindText,deliverySummary,endpointPreview,trendMetrics,trendHeight,trendClass,metricTitle,displayStatus,statusBadgeName,deviceClass,showProbeCountdown,probeCountdownPercent,probeCountdownText,probeStripClass,formatTime,formatDuration,loginAdmin,logoutAdmin,openSettings,triggerMonitorNow,toggleBulkMode,isDeviceSelected,toggleDeviceSelection,selectVisibleDevices,clearBulkSelection,handleDeviceCardClick,bulkPause,bulkStop,bulkUpdateGroup,bulkUpdateProbeInterval,openBulkDeleteConfirm,closeBulkDeleteConfirm,bulkDeleteDevices,openAssetModalForCreate,openAssetModalForEdit,saveSingleAsset,submitBulkImport,deleteDevice,toggleMonitoring,pauseMonitoring,enableMonitoring,stopMonitoring,pauseDetailDevice,enableDetailDevice,stopDetailDevice,editDetailDevice,deleteDetailDevice,openDeviceDetail,saveMaintenance,clearMaintenance,saveSettings,openPoliciesTab,loadPolicyForm,saveGroupPolicy,deleteGroupPolicy,openChannelsTab,resetChannelForm,loadChannelForm,saveNotificationChannel,testNotificationChannel,deleteNotificationChannel,loadRouteForm,saveGroupRoute,downloadBackup,downloadDevicesCsv,onRestoreFileChange,restoreBackup,fetchLogs,openLogsTab,fetchAuditTimeline,openAuditTab,fetchDeleteSnapshots,openSnapshotsTab,isDeletionSnapshot,downloadLogCsvSnapshot,openSnapshotRestore,closeSnapshotRestore,selectRestorableSnapshotRows,isSnapshotRowSelected,toggleSnapshotRow,restoreSelectedSnapshotRows,fetchAlerts,openAlertsTab,fetchNotificationDeliveries};
+	const onGlobalKeydown=(event)=>{if(event.key==='Escape'){showDeviceDetailModal.value=false;showAssetModal.value=false;showSettingsModal.value=false;closeBulkDeleteConfirm();closeSnapshotRestore();return;}if(event.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)){event.preventDefault();searchInput.value?.focus();}};
+	onMounted(async()=>{document.addEventListener('keydown',onGlobalKeydown);if(adminToken.value){await refreshDashboard();try{weakAdminPassword.value=(await apiJson('/api/security-status',{headers:authHeaders()})).weak_admin_password;}catch(e){}}timer=setInterval(refreshDashboard,10000);clockTimer=setInterval(()=>nowTick.value=Date.now(),1000);});
+	onBeforeUnmount(()=>{document.removeEventListener('keydown',onGlobalKeydown);clearTimeout(searchDebounceTimer);if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);});
+		return {devices,summary,riskDevices,error,engineReady,stateCounts,offlineTop,adminToken,authRole,weakAdminPassword,showAuthModal,showSettingsModal,settingsTab,settings,settingsMsg,settingsErr,authError,adminUser,adminPass,restoreFile,isTriggering,isBulkUpdating,bulkMode,selectedDeviceIds,bulkGroupName,bulkProbeInterval,showBulkDeleteModal,bulkDeleteConfirmation,showSnapshotRestoreModal,snapshotRestoreRows,selectedSnapshotRows,isRestoringSnapshot,showAssetModal,showDeviceDetailModal,deviceDetail,maintenanceUntilLocal,maintenanceNote,assetTab,bulkText,assetForm,toast,selectedGroup,statusFilter,keyword,sortMode,viewMode,currentPage,pageSize,pageCount,visibleDevices,searchInput,logs,logLevel,logCategory,logKeyword,auditTimeline,auditKeyword,auditDeviceId,auditAction,deleteSnapshots,snapshotKeyword,snapshotOperator,snapshotStart,snapshotEnd,alerts,alertType,alertDeviceId,groupPolicies,policyForm,notificationChannels,groupRoutes,notificationDeliveries,channelForm,routeGroupName,routeChannelIds,deliveryStatus,deliveryChannelId,channelEndpointPlaceholder,groups,groupStats,filteredDevices,totalCount,onlineCount,offlineCount,unknownCount,pausedCount,statusText,auditActionText,probeTypeText,channelTypeText,deliveryKindText,deliverySummary,endpointPreview,trendMetrics,trendHeight,trendClass,metricTitle,displayStatus,statusBadgeName,deviceClass,isStale,showProbeCountdown,probeCountdownPercent,probeCountdownText,probeStripClass,formatTime,formatAge,formatDuration,loginAdmin,logoutAdmin,openSettings,triggerMonitorNow,toggleBulkMode,isDeviceSelected,toggleDeviceSelection,selectVisibleDevices,clearBulkSelection,handleDeviceCardClick,bulkPause,bulkStop,bulkUpdateGroup,bulkUpdateProbeInterval,openBulkDeleteConfirm,closeBulkDeleteConfirm,bulkDeleteDevices,openAssetModalForCreate,openAssetModalForEdit,saveSingleAsset,submitBulkImport,deleteDevice,toggleMonitoring,pauseMonitoring,enableMonitoring,stopMonitoring,pauseDetailDevice,enableDetailDevice,stopDetailDevice,editDetailDevice,deleteDetailDevice,openDeviceDetail,saveMaintenance,clearMaintenance,saveSettings,openPoliciesTab,loadPolicyForm,saveGroupPolicy,deleteGroupPolicy,openChannelsTab,resetChannelForm,loadChannelForm,saveNotificationChannel,testNotificationChannel,deleteNotificationChannel,loadRouteForm,saveGroupRoute,downloadBackup,downloadDevicesCsv,onRestoreFileChange,restoreBackup,fetchLogs,openLogsTab,fetchAuditTimeline,openAuditTab,fetchDeleteSnapshots,openSnapshotsTab,isDeletionSnapshot,downloadLogCsvSnapshot,openSnapshotRestore,closeSnapshotRestore,selectRestorableSnapshotRows,isSnapshotRowSelected,toggleSnapshotRow,restoreSelectedSnapshotRows,fetchAlerts,openAlertsTab,fetchNotificationDeliveries};
 }
 }).mount('#app');
 </script>

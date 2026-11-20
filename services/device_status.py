@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from database import SessionLocal
-from models import Device, MonitoringState, SystemSetting
+from models import Device, GroupPolicy, MonitoringState, ProbeMetric, SystemSetting
 
 DEFAULT_PROBE_INTERVAL_SECONDS = 30
 
@@ -35,6 +35,8 @@ class DeviceOut(BaseModel):
     last_error: str = ""
     success_streak: int = 0
     failure_streak: int = 0
+    offline_threshold: int = 3
+    last_latency_ms: int | None = None
 
 
 def is_in_maintenance(device: Device, now: datetime | None = None) -> bool:
@@ -80,6 +82,8 @@ def as_device_out(
     latest_map: dict[int, tuple[str, datetime | None]],
     probe_map: dict[int, datetime | None] | None = None,
     default_probe_interval_seconds: int = DEFAULT_PROBE_INTERVAL_SECONDS,
+    offline_threshold: int = 3,
+    last_latency_ms: int | None = None,
 ) -> DeviceOut:
     latest_status = device.current_status.value if device.current_status else "UNKNOWN"
     latest_event_time = device.status_since
@@ -126,6 +130,8 @@ def as_device_out(
         last_error=device.last_error or "",
         success_streak=device.success_streak or 0,
         failure_streak=device.failure_streak or 0,
+        offline_threshold=offline_threshold,
+        last_latency_ms=last_latency_ms,
     )
 
 
@@ -161,12 +167,34 @@ def load_probe_interval_seconds() -> int:
     return max(1, int(setting.ping_interval or DEFAULT_PROBE_INTERVAL_SECONDS))
 
 
+def load_offline_threshold(group_name: str) -> int:
+    with SessionLocal() as session:
+        setting = session.execute(select(SystemSetting).limit(1)).scalar_one_or_none()
+        policy = session.execute(
+            select(GroupPolicy).where(GroupPolicy.group_name == group_name)
+        ).scalar_one_or_none()
+    return max(1, int(policy.offline_threshold if policy else setting.offline_threshold if setting else 3))
+
+
 def load_current_device_statuses() -> list[DeviceOut]:
     with SessionLocal() as session:
         devices = session.execute(select(Device).order_by(Device.id.asc())).scalars().all()
-
-    probe_interval_seconds = load_probe_interval_seconds()
-    return [as_device_out(device, {}, {}, probe_interval_seconds) for device in devices]
+        setting = session.execute(select(SystemSetting).limit(1)).scalar_one_or_none()
+        policies = {policy.group_name: policy.offline_threshold for policy in
+                    session.execute(select(GroupPolicy)).scalars().all()}
+        latest_metric_id = (
+            select(ProbeMetric.id).where(ProbeMetric.device_id == Device.id)
+            .order_by(ProbeMetric.id.desc()).limit(1).correlate(Device).scalar_subquery()
+        )
+        latency = dict(session.execute(
+            select(Device.id, ProbeMetric.latency_ms).select_from(Device)
+            .outerjoin(ProbeMetric, ProbeMetric.id == latest_metric_id)
+        ).all())
+        probe_interval_seconds = max(1, int(setting.ping_interval if setting else DEFAULT_PROBE_INTERVAL_SECONDS))
+        default_threshold = max(1, int(setting.offline_threshold if setting else 3))
+    return [as_device_out(device, {}, {}, probe_interval_seconds,
+                          policies.get(device.group_name, default_threshold),
+                          latency.get(device.id)) for device in devices]
 
 
 def device_uptime_percent_7d(offline_seconds: int) -> float:

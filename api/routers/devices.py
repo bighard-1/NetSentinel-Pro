@@ -16,6 +16,7 @@ from services.device_status import (
     as_aware_utc,
     as_device_out,
     device_uptime_percent_7d,
+    load_offline_threshold,
     load_current_device_statuses,
     load_probe_interval_seconds,
 )
@@ -192,7 +193,8 @@ def _probe_metric_out(metric: ProbeMetric) -> ProbeMetricOut:
 
 
 def _device_out(device: Device) -> DeviceOut:
-    return as_device_out(device, {}, {}, load_probe_interval_seconds())
+    return as_device_out(device, {}, {}, load_probe_interval_seconds(),
+                         load_offline_threshold(device.group_name))
 
 
 def _alert_history_out(alert: AlertLog, device: Device) -> AlertHistoryOut:
@@ -679,7 +681,8 @@ def get_device_detail(device_id: int, _: None = Depends(verify_admin_token)) -> 
 
         probe_interval = load_probe_interval_seconds()
         return DeviceDetailOut(
-            device=as_device_out(device, {}, {}, probe_interval),
+            device=as_device_out(device, {}, {}, probe_interval,
+                                 load_offline_threshold(device.group_name)),
             alerts=[_alert_history_out(alert, device) for alert in alert_rows],
             alerts_24h=int(alerts_24h),
             offline_count_7d=int(offline_count_7d),
