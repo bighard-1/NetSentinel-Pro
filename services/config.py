@@ -27,6 +27,7 @@ class AppSettings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_max_bytes: int = Field(default=10485760, ge=1024)
     log_backup_count: int = Field(default=5, ge=1, le=100)
+    metrics_token: SecretStr = SecretStr("")
     max_restore_bytes: int = Field(default=52428800, ge=1024)
     max_bulk_import_bytes: int = Field(default=1048576, ge=1024)
     probe_concurrency: int = Field(default=50, ge=1, le=1000)

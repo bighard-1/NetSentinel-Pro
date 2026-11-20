@@ -15,6 +15,7 @@ def test_logging_contract() -> None:
             ADMIN_USER="p6-test",
             ADMIN_PASS="p6-test-pass",
             APP_SECRET="p6-test-fixed-secret",
+            METRICS_TOKEN="p6-metrics-secret",
             PYTHONPATH=str(PROJECT_ROOT),
             TMPDIR=test_dir,
             XDG_CACHE_HOME=test_dir,

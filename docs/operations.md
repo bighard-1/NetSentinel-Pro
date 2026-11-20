@@ -8,6 +8,7 @@
 - `GET /health/ready` 检查后台监控/告警任务、最近探测心跳和数据库连接；503 应触发运维排查。
 - 查看 `data/monitor.db`、`data/monitor.db-wal`、`data/backups/` 与 `data/audit/` 的剩余空间和权限。
 - 运行日志为 JSON 行格式，写入标准错误输出和 `data/logs/app.jsonl`；单文件默认 10 MiB、保留 5 个轮转文件。API 响应的 `X-Request-ID` 可用于关联同一次请求的日志；设备事件含 `device_id`。
+- Prometheus 抓取 `GET /metrics` 须提供 `Authorization: Bearer <METRICS_TOKEN>`，或使用管理员登录令牌。返回 Prometheus 0.0.4 文本，计数器在进程重启后归零；通知结果指标是当前保留窗口内的记录数。勿把抓取令牌放在查询字符串里。
 - 每次升级后执行 `python scripts/self_check.py`，并检查通知渠道测试发送的投递记录。
 
 ## 容量规划

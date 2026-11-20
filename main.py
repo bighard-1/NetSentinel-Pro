@@ -48,6 +48,7 @@ from services.migrations import (
     validate_release_version,
     verify_and_record_upgrade,
 )
+from services.metrics import render_metrics
 from services.config import load_config
 from services.retention import cleanup_history
 from services.schema import ensure_default_setting
@@ -453,3 +454,24 @@ async def attach_request_id(request: Request, call_next):
         return response
     finally:
         request_id_context.reset(context_token)
+
+
+@app.get("/metrics", tags=["System"])
+async def prometheus_metrics(request: Request) -> Response:
+    authorization = request.headers.get("authorization", "")
+    token = authorization.removeprefix("Bearer ").strip() if authorization.startswith("Bearer ") else ""
+    metrics_token = load_config().metrics_token.get_secret_value()
+    authorized = bool(metrics_token and secrets.compare_digest(token, metrics_token))
+    if not authorized:
+        payload = verify_admin_token_value(token) if token else None
+        authorized = payload is not None and payload.get("scope") == "admin"
+    if not authorized:
+        raise HTTPException(status_code=401, detail="Metrics token required")
+    monitor_task = getattr(request.app.state, "monitor_task", None)
+    alert_task = getattr(request.app.state, "alert_task", None)
+    body = await asyncio.to_thread(
+        render_metrics,
+        monitor_running=monitor_task is not None and not monitor_task.done(),
+        alert_running=alert_task is not None and not alert_task.done(),
+    )
+    return Response(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")

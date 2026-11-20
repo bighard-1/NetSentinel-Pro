@@ -6,10 +6,12 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from main import app
+from services.metrics_state import observe_probe_duration, record_probe_result
 
 
 def logging_contract() -> None:
     with TestClient(app) as client:
+        assert client.get("/metrics").status_code == 401
         login = client.post("/api/v1/auth/login", json={"username": "p6-test", "password": "p6-test-pass"})
         assert login.status_code == 200, login.text
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
@@ -24,6 +26,19 @@ def logging_contract() -> None:
         assert created.status_code == 200, created.text
         device_id = created.json()["id"]
         request_id = created.headers["X-Request-ID"]
+        observe_probe_duration(0.08)
+        record_probe_result(True)
+        metrics = client.get("/metrics", headers={"Authorization": "Bearer p6-metrics-secret"})
+        assert metrics.status_code == 200, metrics.text
+        assert metrics.headers["content-type"].startswith("text/plain; version=0.0.4")
+        assert 'netsentinel_probes_total{result="success"}' in metrics.text
+        assert 'netsentinel_probe_duration_seconds_bucket{le="0.1"}' in metrics.text
+        assert 'netsentinel_devices{status="unknown"} 1' in metrics.text
+        assert "netsentinel_monitor_heartbeat_timestamp_seconds" in metrics.text
+        assert "netsentinel_alert_outbox_pending" in metrics.text
+        assert "netsentinel_notification_deliveries" in metrics.text
+        assert "netsentinel_database_size_bytes" in metrics.text
+        assert client.get("/metrics", headers=headers).status_code == 200
 
     logs = [json.loads(line) for line in Path("data/logs/app.jsonl").read_text(encoding="utf-8").splitlines()]
     assert logs

@@ -14,6 +14,7 @@ from sqlalchemy.exc import OperationalError
 
 from database import SessionLocal
 from logging_service import log_event, logger
+from services.metrics_state import observe_probe_duration, record_probe_result
 from models import (
     AlertLog,
     AlertOutbox,
@@ -452,25 +453,31 @@ async def _monitor_round(force_probe: bool, target_ids: set[int] | None = None) 
 
     async def limited_probe(device: Device) -> ProbeResult:
         async with semaphore:
-            result = await probe_device(device)
-            for _ in range(max(0, min(2, device.probe_retry_count or 0))):
-                if result.success:
-                    break
-                await asyncio.sleep(0.2)
+            probe_started = time.perf_counter()
+            try:
                 result = await probe_device(device)
-            return result
+                for _ in range(max(0, min(2, device.probe_retry_count or 0))):
+                    if result.success:
+                        break
+                    await asyncio.sleep(0.2)
+                    result = await probe_device(device)
+                return result
+            finally:
+                observe_probe_duration(time.perf_counter() - probe_started)
 
     probe_results = await asyncio.gather(*(limited_probe(device) for device in due_devices), return_exceptions=True)
     failed_probes = 0
     infrastructure_errors: list[ProbeInfrastructureError] = []
     for device, result in zip(due_devices, probe_results):
         if isinstance(result, ProbeInfrastructureError):
+            record_probe_result(False)
             infrastructure_errors.append(result)
             continue
         if isinstance(result, ProbeResult):
             probe_result = result
         else:
             probe_result = ProbeResult(success=False, error=str(result)[:500])
+        record_probe_result(probe_result.success)
         if not probe_result.success:
             failed_probes += 1
         checked_at = _now_utc()
