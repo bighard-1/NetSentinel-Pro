@@ -6,7 +6,21 @@ All notable changes to NetSentinel Pro are documented here. This file follows [K
 
 ### Added
 
-- Repository governance and release quality gates are being prepared in P5.
+- No entries yet.
+
+## [0.6.0] - 2026-11-19
+
+### Added
+
+- Apache-2.0 licensing, contributor and security guidance, CI checks, dependency updates, release automation, and API/operations documentation.
+- Versioned `/api/v1` routes with legacy aliases, bounded API rate limiting, pagination filters, central write audit records, and release/migration status.
+- JSON request logs with rotation, authenticated Prometheus metrics, service self-monitoring and optional external heartbeat pings.
+- Daily online backups, startup and daily capacity snapshots, and an isolated restore drill script.
+
+### Changed
+
+- Batch updates leave unchanged devices untouched; API errors include `code`, `message`, and compatible `detail` fields.
+- Startup backs up existing data when either the application version or database migration version changes.
 
 ## [0.5.0] - 2026-11-19
 
@@ -29,5 +43,6 @@ All notable changes to NetSentinel Pro are documented here. This file follows [K
 - Authentication and input validation cover protected API routes; outbound notification destinations are restricted.
 - Vue is served locally; the page no longer requires a third-party CDN to start.
 
-[Unreleased]: https://github.com/bighard-1/NetSentinel-Pro/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/bighard-1/NetSentinel-Pro/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/bighard-1/NetSentinel-Pro/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/bighard-1/NetSentinel-Pro/releases/tag/v0.5.0

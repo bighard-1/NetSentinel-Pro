@@ -284,7 +284,7 @@ location / {
 
 镜像以 UID 10001 运行，挂载的 `data/` 必须对该 UID 可写。Compose 根文件系统只读，只给 `data/` 写权限和 ICMP 所需的 `NET_RAW` 能力。构建镜像前请检查 Docker 数据根目录的剩余空间与所在磁盘。
 
-启动时会检查数据库迁移版本。需要升级旧库时，系统先在 `data/backups/` 创建通过完整性检查的在线备份，然后应用 Alembic 迁移。若迁移失败，应停止服务、保留原库与升级前备份，再从备份恢复。`GET /health/ready` 会检查后台任务、监控心跳与数据库连接；容器健康检查使用此接口。
+启动时会检查应用与数据库迁移版本。任一版本变化时，系统先在 `data/backups/` 创建通过完整性检查的在线备份，然后应用 Alembic 迁移。若迁移失败，应停止服务、保留原库与升级前备份，再从备份恢复。`GET /health/ready` 会检查后台任务、监控心跳与数据库连接；容器健康检查使用此接口。
 
 P3 迁移将设备唯一标识改为 IP、探测类型、端口、路径的组合；同一个 IP 可添加不同 TCP 端口或 HTTP 路径。旧库升级前的备份按 `BACKUP_RETENTION_COUNT` 每类保留最近 N 份。升级失败时先停止服务，将最新的 `data/backups/monitor-pre-upgrade-*.db` 复制到 `data/monitor.db`，确认文件属主与权限，然后重新启动旧版程序。恢复操作失败时使用 `monitor-pre-restore-*.db` 同样回滚；操作前应另存当前数据库和 WAL 文件以便调查。SQLite 在线备份包含已提交的 WAL 数据。时间在 API 中使用带 `+00:00` 时区的 UTC 格式，浏览器按本地时区显示。
 
@@ -416,7 +416,7 @@ docker run --rm --platform linux/amd64 netsentinel-pro:self-check python scripts
 
 ## 升级、备份与排障
 
-升级前另存 `data/` 和 `APP_SECRET`，确认数据盘空间；新版本启动时先对需要迁移的旧库创建 `data/backups/monitor-pre-upgrade-*.db`，再执行 Alembic 迁移。升级后检查 `/health/ready`、设备状态及渠道测试发送。失败时停止服务，从升级前备份恢复 `data/monitor.db` 并启动旧版代码。完整步骤见 [运维手册](docs/operations.md#备份升级与回滚)。下载在线备份和上传恢复的接口及限制见 [API 文档](docs/api.md#备份恢复backup)。
+升级前另存 `data/` 和 `APP_SECRET`，确认数据盘空间；新版本启动时如果应用或迁移版本变化，会创建 `data/backups/monitor-pre-upgrade-*.db`，再执行 Alembic 迁移。升级后检查 `/health/ready`、认证后的 `/api/version`、设备状态及渠道测试发送。失败时停止服务，从升级前备份恢复 `data/monitor.db` 并启动旧版代码。完整步骤见 [运维手册](docs/operations.md#备份升级与回滚)。下载在线备份和上传恢复的接口及限制见 [API 文档](docs/api.md#备份恢复backup)。
 
 常见问题：
 
