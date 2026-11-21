@@ -103,7 +103,7 @@ jobs:
     needs: image_scan
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -148,6 +148,24 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+      - name: Publish downloadable amd64 preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="amd64-candidate-${GITHUB_SHA:0:12}"
+          cat > image-dist/RELEASE_NOTES.txt <<'EOF'
+          This is a preview image from the codex/p6-observability branch, not the v0.6.0 release.
+          The linux/amd64 image passed the project test suite, container self-check and Trivy scan.
+          Download image.tar.gz, SHA256SUMS and IMAGE_TAG. Verify with `sha256sum -c SHA256SUMS`, then import with `gzip -dc image.tar.gz | docker load`.
+          The source pull request remains open for review before merging to main.
+          EOF
+          gh release create "$tag" \
+            image-dist/image.tar.gz image-dist/SHA256SUMS image-dist/IMAGE_TAG \
+            --target "$GITHUB_SHA" \
+            --prerelease --latest=false \
+            --title "NetSentinel Pro amd64 preview ${GITHUB_SHA:0:12}" \
+            --notes-file image-dist/RELEASE_NOTES.txt
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

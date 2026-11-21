@@ -295,7 +295,7 @@ P3 数据模型升级后的复测结果见 [P3 压测报告](docs/benchmarks/p3-
 
 ## x86_64（amd64）Docker 镜像
 
-CI 在整改分支通过测试和双架构安全扫描后，会额外构建并运行 amd64 容器自检，再将镜像打包为 GitHub Actions 构件。进入对应的 [CI 运行页面](https://github.com/bighard-1/NetSentinel-Pro/actions/workflows/ci.yml)，在 **Artifacts** 下载名称为 `netsentinel-pro-amd64-<提交 SHA 前 12 位>` 的构件。构件包含 `image.tar.gz`、`SHA256SUMS` 和 `IMAGE_TAG`，保留 30 天。
+CI 在整改分支通过测试和双架构安全扫描后，会额外构建并运行 amd64 容器自检，再将镜像文件上传到仓库的 [Releases](https://github.com/bighard-1/NetSentinel-Pro/releases) 作为 **Pre-release**，标签为 `amd64-candidate-<提交 SHA 前 12 位>`。在该预发布页分别下载 `image.tar.gz`、`SHA256SUMS` 和 `IMAGE_TAG`；它们是镜像发行资产，不出现在 Code 文件列表。镜像也会作为 [Actions 构件](https://github.com/bighard-1/NetSentinel-Pro/actions/workflows/ci.yml)保存 30 天，供备用下载。
 
 服务器为 x86_64 且可运行 Docker 时，将下载的构件解压到服务器目录，核对压缩包后导入镜像：
 
