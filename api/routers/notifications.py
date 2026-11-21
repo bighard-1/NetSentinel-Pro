@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import desc, func, select
 
 from alert import send_test_notification
@@ -15,8 +15,11 @@ from models import (
     NotificationChannelType,
     NotificationDelivery,
 )
+from services.secrets import apply_secret_update, encrypt_secret, mask_secret, MASK
+from services.webhook_security import validate_webhook_url
+from services.redaction import redact_text
 
-router = APIRouter(prefix="/api", tags=["Notifications"])
+router = APIRouter(tags=["Notifications"])
 
 
 class NotificationChannelOut(BaseModel):
@@ -35,6 +38,12 @@ class NotificationChannelUpdate(BaseModel):
     enabled: bool = True
     extra_config: str = Field(default="", max_length=4000)
 
+    @model_validator(mode="after")
+    def validate_endpoint(self):
+        if self.channel_type != NotificationChannelType.EMAIL and self.endpoint and not self.endpoint.startswith(MASK):
+            validate_webhook_url(self.endpoint)
+        return self
+
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
@@ -44,7 +53,7 @@ class NotificationChannelUpdate(BaseModel):
     @classmethod
     def validate_extra_config(cls, value: str) -> str:
         value = value.strip()
-        if not value:
+        if not value or value.startswith(MASK):
             return ""
         try:
             json.loads(value)
@@ -82,9 +91,9 @@ def _notification_channel_out(channel: NotificationChannel) -> NotificationChann
         id=channel.id,
         name=channel.name,
         channel_type=channel.channel_type.value,
-        endpoint=channel.endpoint,
+        endpoint=mask_secret(channel.endpoint),
         enabled=channel.enabled,
-        extra_config=channel.extra_config,
+        extra_config=mask_secret(channel.extra_config),
     )
 
 
@@ -99,8 +108,8 @@ def _notification_delivery_out(delivery: NotificationDelivery) -> NotificationDe
         title=delivery.title,
         status=delivery.status,
         http_status=delivery.http_status,
-        error=delivery.error,
-        response_excerpt=delivery.response_excerpt,
+        error=redact_text(delivery.error),
+        response_excerpt=redact_text(delivery.response_excerpt),
         created_at=delivery.created_at,
     )
 
@@ -126,9 +135,9 @@ def create_notification_channel(
         channel = NotificationChannel(
             name=payload.name,
             channel_type=payload.channel_type,
-            endpoint=payload.endpoint.strip(),
+            endpoint=encrypt_secret(payload.endpoint.strip()),
             enabled=payload.enabled,
-            extra_config=payload.extra_config.strip(),
+            extra_config=encrypt_secret(payload.extra_config.strip()),
         )
         session.add(channel)
         session.commit()
@@ -149,15 +158,17 @@ def update_notification_channel(
         if channel is None:
             raise HTTPException(status_code=404, detail="Notification channel not found")
         exists = session.execute(
-            select(NotificationChannel).where(NotificationChannel.name == payload.name, NotificationChannel.id != channel_id)
+            select(NotificationChannel).where(
+                NotificationChannel.name == payload.name, NotificationChannel.id != channel_id
+            )
         ).scalar_one_or_none()
         if exists is not None:
             raise HTTPException(status_code=400, detail="channel name already exists")
         channel.name = payload.name
         channel.channel_type = payload.channel_type
-        channel.endpoint = payload.endpoint.strip()
+        channel.endpoint = apply_secret_update(payload.endpoint, channel.endpoint)
         channel.enabled = payload.enabled
-        channel.extra_config = payload.extra_config.strip()
+        channel.extra_config = apply_secret_update(payload.extra_config, channel.extra_config)
         session.commit()
         session.refresh(channel)
 
@@ -172,9 +183,11 @@ def delete_notification_channel(channel_id: int, _: None = Depends(verify_admin_
         if channel is None:
             raise HTTPException(status_code=404, detail="Notification channel not found")
         channel_name = channel.name
-        routes = session.execute(
-            select(GroupNotificationRoute).where(GroupNotificationRoute.channel_id == channel_id)
-        ).scalars().all()
+        routes = (
+            session.execute(select(GroupNotificationRoute).where(GroupNotificationRoute.channel_id == channel_id))
+            .scalars()
+            .all()
+        )
         for route in routes:
             session.delete(route)
         session.delete(channel)
@@ -199,9 +212,10 @@ def list_notification_deliveries(
     channel_id: int | None = Query(default=None, ge=1),
     status: str | None = Query(default=None, pattern="^(SUCCESS|FAILED)$"),
     limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ) -> list[NotificationDeliveryOut]:
     with SessionLocal() as session:
-        stmt = select(NotificationDelivery).order_by(desc(NotificationDelivery.id)).limit(limit)
+        stmt = select(NotificationDelivery).order_by(desc(NotificationDelivery.id)).limit(limit).offset(offset)
         if channel_id is not None:
             stmt = stmt.where(NotificationDelivery.channel_id == channel_id)
         if status:
@@ -240,9 +254,11 @@ def update_group_notification_route(
             ).scalar_one()
             if existing_count != len(unique_channel_ids):
                 raise HTTPException(status_code=400, detail="one or more channel_ids do not exist")
-        old_routes = session.execute(
-            select(GroupNotificationRoute).where(GroupNotificationRoute.group_name == normalized_group)
-        ).scalars().all()
+        old_routes = (
+            session.execute(select(GroupNotificationRoute).where(GroupNotificationRoute.group_name == normalized_group))
+            .scalars()
+            .all()
+        )
         for route in old_routes:
             session.delete(route)
         for channel_id in unique_channel_ids:

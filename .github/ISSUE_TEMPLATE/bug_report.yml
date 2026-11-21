@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible problem without sharing secrets
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "For vulnerabilities, follow SECURITY.md. Remove tokens, Webhook URLs, and private addresses from examples."
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "0.5.0 or commit SHA"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and redacted logs
+      description: Include deployment method, Python or image version, and relevant errors.

@@ -1,7 +1,9 @@
 import os
+import sqlite3
 import sys
 import tempfile
 import time
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -17,9 +19,16 @@ def main() -> int:
     os.environ.setdefault("ADMIN_TOKEN_TTL_SECONDS", "3600")
     sys.path.insert(0, str(PROJECT_ROOT))
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(prefix=".self-check-", dir=PROJECT_ROOT) as tmpdir:
         os.chdir(tmpdir)
         from main import app
+        from database import DB_DIR
+        from engine import _http_url
+        from models import Device, ProbeType
+
+        assert (
+            _http_url(Device(ip_address="::1", probe_type=ProbeType.HTTP, probe_path="health")) == "http://[::1]/health"
+        )
 
         with TestClient(app) as client:
             health = client.get("/health")
@@ -52,7 +61,33 @@ def main() -> int:
             assert create.json()["probe_interval_seconds"] == 7
             assert "status_description" in create.json()
 
-            devices = client.get("/api/devices")
+            # A live database in WAL mode must produce a complete single-file backup.
+            with closing(sqlite3.connect(DB_DIR / "monitor.db")) as live_db:
+                live_db.execute("PRAGMA journal_mode=WAL")
+                live_db.execute("PRAGMA wal_autocheckpoint=0")
+                live_db.execute("CREATE TABLE backup_probe (value TEXT NOT NULL)")
+                live_db.execute("INSERT INTO backup_probe (value) VALUES ('from-wal')")
+                live_db.commit()
+                backup = client.get("/api/backup", headers=headers)
+                assert backup.status_code == 200, backup.text
+                downloaded_path = Path(tmpdir) / "downloaded.db"
+                downloaded_path.write_bytes(backup.content)
+                with closing(sqlite3.connect(downloaded_path)) as downloaded:
+                    assert downloaded.execute("SELECT value FROM backup_probe").fetchone() == ("from-wal",)
+                assert not list(DB_DIR.glob("monitor-backup-*.db"))
+                live_db.execute("DROP TABLE backup_probe")
+                live_db.commit()
+            downloaded_path.write_bytes(client.get("/api/backup", headers=headers).content)
+
+            invalid_backup = client.post(
+                "/api/restore",
+                headers=headers,
+                files={"file": ("empty.db", b"", "application/octet-stream")},
+            )
+            assert invalid_backup.status_code == 400, invalid_backup.text
+            assert not list(DB_DIR.glob("monitor-restore-*.tmp"))
+
+            devices = client.get("/api/devices", headers=headers)
             assert devices.status_code == 200, devices.text
             assert len(devices.json()) == 1
 
@@ -135,7 +170,7 @@ def main() -> int:
                     "channel_type": "WEBHOOK",
                     "endpoint": "",
                     "enabled": True,
-                    "extra_config": "{\"env\":\"self-check\"}",
+                    "extra_config": '{"env":"self-check"}',
                 },
             )
             assert channel.status_code == 200, channel.text
@@ -162,7 +197,7 @@ def main() -> int:
             assert routes.status_code == 200, routes.text
             assert routes.json()[0]["group_name"] == "self-check"
 
-            summary = client.get("/api/summary")
+            summary = client.get("/api/summary", headers=headers)
             assert summary.status_code == 200, summary.text
             assert summary.json()["total_devices"] == 1
 
@@ -219,7 +254,7 @@ def main() -> int:
             )
             assert bulk_update.status_code == 200, bulk_update.text
             assert bulk_update.json()["updated"] == 2
-            bulk_rows = client.get("/api/devices")
+            bulk_rows = client.get("/api/devices", headers=headers)
             assert bulk_rows.status_code == 200, bulk_rows.text
             by_id = {row["id"]: row for row in bulk_rows.json()}
             assert by_id[1]["group_name"] == "bulk-check"
@@ -237,7 +272,7 @@ def main() -> int:
             assert stopped.json()["is_monitoring"] is False
             assert "保留在监控墙" in stopped.json()["status_description"]
 
-            still_listed = client.get("/api/devices")
+            still_listed = client.get("/api/devices", headers=headers)
             assert still_listed.status_code == 200, still_listed.text
             assert len(still_listed.json()) == 2
             assert {row["id"]: row for row in still_listed.json()}[1]["monitoring_state"] == "STOPPED"
@@ -288,7 +323,7 @@ def main() -> int:
             assert alerts.status_code == 200, alerts.text
             assert isinstance(alerts.json(), list)
 
-            risk_devices = client.get("/api/risk-devices")
+            risk_devices = client.get("/api/risk-devices", headers=headers)
             assert risk_devices.status_code == 200, risk_devices.text
             assert isinstance(risk_devices.json(), list)
 
@@ -308,7 +343,7 @@ def main() -> int:
                 json={"device_ids": [1, second_id], "confirmation": "1"},
             )
             assert rejected_bulk_delete.status_code == 400, rejected_bulk_delete.text
-            still_after_reject = client.get("/api/devices")
+            still_after_reject = client.get("/api/devices", headers=headers)
             assert still_after_reject.status_code == 200, still_after_reject.text
             assert len(still_after_reject.json()) == 2
 
@@ -326,7 +361,9 @@ def main() -> int:
             assert "CSV_SNAPSHOT_START" in delete_audit["details"]
             assert "Second,127.0.0.2,bulk-check" in delete_audit["details"]
             assert "Localhost,127.0.0.1,bulk-check" in delete_audit["details"]
-            snapshot_line = next(line for line in delete_audit["details"].splitlines() if line.startswith("snapshot_file="))
+            snapshot_line = next(
+                line for line in delete_audit["details"].splitlines() if line.startswith("snapshot_file=")
+            )
             snapshot_path = Path(snapshot_line.split("=", 1)[1])
             assert snapshot_path.exists(), delete_audit["details"]
             assert "Second,127.0.0.2,bulk-check" in snapshot_path.read_text(encoding="utf-8-sig")
@@ -365,7 +402,7 @@ def main() -> int:
             assert partial_restore.status_code == 200, partial_restore.text
             assert partial_restore.json()["restored"] == 1
             assert partial_restore.json()["skipped"] == 0
-            restored_rows = client.get("/api/devices")
+            restored_rows = client.get("/api/devices", headers=headers)
             assert restored_rows.status_code == 200, restored_rows.text
             assert len(restored_rows.json()) == 1
             restored_device = restored_rows.json()[0]
@@ -398,21 +435,52 @@ def main() -> int:
 
             cleanup_restored = client.delete(f"/api/devices/{restored_device['id']}", headers=headers)
             assert cleanup_restored.status_code == 200, cleanup_restored.text
-            after_delete = client.get("/api/devices")
+            after_delete = client.get("/api/devices", headers=headers)
             assert after_delete.status_code == 200, after_delete.text
             assert after_delete.json() == []
+
+            recreated = client.post(
+                "/api/devices",
+                headers=headers,
+                json={"name": "Recreated", "ip_address": "127.0.0.1", "group_name": "self-check"},
+            )
+            assert recreated.status_code == 200, recreated.text
+            assert recreated.json()["latest_status"] == "UNKNOWN"
+            assert recreated.json()["latest_probe_time"] is None
+            client.app.state.last_manual_trigger_ts = 0.0
+            retrigger = client.post("/api/trigger-monitor", headers=headers)
+            assert retrigger.status_code == 200, retrigger.text
+            time.sleep(1.5)
+            recreated_detail = client.get(f"/api/devices/{recreated.json()['id']}/detail", headers=headers)
+            assert recreated_detail.status_code == 200, recreated_detail.text
+            assert recreated_detail.json()["device"]["latest_status"] == "ONLINE"
+            remove_recreated = client.delete(f"/api/devices/{recreated.json()['id']}", headers=headers)
+            assert remove_recreated.status_code == 200, remove_recreated.text
 
             for index in range(5):
                 bad_login = client.post(
                     "/api/auth/login",
+                    headers={"X-Forwarded-For": f"198.51.100.{index + 1}"},
                     json={"username": "selfcheck", "password": f"bad-{index}"},
                 )
                 assert bad_login.status_code == 401, bad_login.text
             limited = client.post(
                 "/api/auth/login",
+                headers={"X-Forwarded-For": "203.0.113.1"},
                 json={"username": "selfcheck", "password": "still-bad"},
             )
             assert limited.status_code == 429, limited.text
+
+            restored_backup = client.post(
+                "/api/restore",
+                headers=headers,
+                files={"file": ("downloaded.db", downloaded_path.read_bytes(), "application/octet-stream")},
+            )
+            assert restored_backup.status_code == 200, restored_backup.text
+            assert not list(DB_DIR.glob("monitor-restore-*.tmp"))
+            devices_after_restore = client.get("/api/devices", headers=headers)
+            assert devices_after_restore.status_code == 200, devices_after_restore.text
+            assert [row["name"] for row in devices_after_restore.json()] == ["Localhost"]
 
     print("Self-check passed")
     return 0

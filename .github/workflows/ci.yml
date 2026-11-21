@@ -1,0 +1,212 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install -r requirements-dev.txt
+      - name: Static checks
+        run: |
+          ruff check .
+          ruff format --check .
+          mypy version.py services/state_machine.py services/availability.py services/retention.py auth.py alert.py
+      - name: Dependency and code security
+        run: |
+          pip-audit --disable-pip --vulnerability-service osv -r requirements.lock
+          bandit -r main.py auth.py alert.py engine.py api services -ll -q
+
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            requirements-dev.txt
+      - name: Install dependencies and browser
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install -r requirements-dev.txt
+          python -m playwright install --with-deps chromium
+      - name: Run tests and coverage gate
+        run: |
+          python -m pytest -q --cov --cov-report=term --cov-report=json:coverage.json
+          python scripts/check_core_coverage.py coverage.json
+          python scripts/self_check.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: core-coverage
+          path: coverage.json
+          if-no-files-found: ignore
+
+  image_scan:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Build ${{ matrix.platform }} image for scanning
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: netsentinel:ci-${{ matrix.arch }}
+      - name: Scan high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: netsentinel:ci-${{ matrix.arch }}
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+  build_amd64_artifact:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/p6-observability'
+    needs: image_scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Set image and artifact names
+        id: image
+        run: |
+          echo "ref=netsentinel-pro:0.6.0-amd64-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+          echo "artifact=netsentinel-pro-amd64-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+      - name: Build linux/amd64 image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ${{ steps.image.outputs.ref }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Verify architecture and run container self-check
+        run: |
+          test "$(docker image inspect '${{ steps.image.outputs.ref }}' --format '{{.Architecture}}')" = amd64
+          docker run --rm --platform linux/amd64 '${{ steps.image.outputs.ref }}' python scripts/self_check.py
+      - name: Scan image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.ref }}
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      - name: Export image and checksum
+        run: |
+          mkdir -p image-dist
+          docker save '${{ steps.image.outputs.ref }}' | gzip -1 > image-dist/image.tar.gz
+          cd image-dist
+          sha256sum image.tar.gz > SHA256SUMS
+          printf '%s\n' '${{ steps.image.outputs.ref }}' > IMAGE_TAG
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.image.outputs.artifact }}
+          path: image-dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Publish downloadable amd64 preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="amd64-candidate-${GITHUB_SHA:0:12}"
+          cat > image-dist/RELEASE_NOTES.txt <<'EOF'
+          This is a preview image from the codex/p6-observability branch, not the v0.6.0 release.
+          The linux/amd64 image passed the project test suite, container self-check and Trivy scan.
+          Download image.tar.gz, SHA256SUMS and IMAGE_TAG. Verify with `sha256sum -c SHA256SUMS`, then import with `gzip -dc image.tar.gz | docker load`.
+          The source pull request remains open for review before merging to main.
+          EOF
+          gh release create "$tag" \
+            image-dist/image.tar.gz image-dist/SHA256SUMS image-dist/IMAGE_TAG \
+            --target "$GITHUB_SHA" \
+            --prerelease --latest=false \
+            --title "NetSentinel Pro amd64 preview ${GITHUB_SHA:0:12}" \
+            --notes-file image-dist/RELEASE_NOTES.txt
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: image_scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Verify tag and application version
+        run: |
+          python - <<'PY'
+          import os
+          from version import __version__
+          expected = f"v{__version__}"
+          actual = os.environ["GITHUB_REF_NAME"]
+          if actual != expected:
+              raise SystemExit(f"Tag {actual} does not match application version {expected}")
+          PY
+      - name: Set image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish multi-architecture image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.name }}:${{ github.ref_name }}
+      - name: Publish release notes
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true

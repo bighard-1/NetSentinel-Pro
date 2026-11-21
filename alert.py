@@ -1,9 +1,8 @@
 import asyncio
 import json
-import os
 import smtplib
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta, timezone
 from email.message import EmailMessage
 from zoneinfo import ZoneInfo
 
@@ -11,8 +10,9 @@ import httpx
 from sqlalchemy import select
 
 from database import SessionLocal
-from logging_service import log_event
+from logging_service import log_event, logger
 from models import (
+    AlertOutbox,
     GroupNotificationRoute,
     GroupPolicy,
     NotificationChannel,
@@ -20,12 +20,11 @@ from models import (
     NotificationDelivery,
     SystemSetting,
 )
+from services.config import load_config
+from services.secrets import decrypt_secret
+from services.webhook_security import validate_webhook_url
 
-FEISHU_WEBHOOK_ENV = "FEISHU_WEBHOOK"
-ALERT_BATCH_INTERVAL_SECONDS = 5
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-
-_alert_queue: asyncio.Queue["AlertEvent"] = asyncio.Queue()
 
 
 @dataclass
@@ -35,6 +34,14 @@ class AlertEvent:
     group_name: str
     status: str
     event_time: datetime
+    device_id: int | None = None
+    duration_seconds: int = 0
+    failure_reason: str = ""
+
+
+def _device_link(device_id: int | None) -> str:
+    base = load_config().public_base_url.strip().rstrip("/")
+    return f"{base}/#device={device_id}" if base and device_id else ""
 
 
 @dataclass
@@ -43,18 +50,6 @@ class DeliveryResult:
     http_status: int | None = None
     response_excerpt: str = ""
     error: str = ""
-
-
-def enqueue_alert_event(device_name: str, ip_address: str, group_name: str, status: str, event_time: datetime) -> None:
-    _alert_queue.put_nowait(
-        AlertEvent(
-            device_name=device_name,
-            ip_address=ip_address,
-            group_name=group_name,
-            status=status,
-            event_time=event_time,
-        )
-    )
 
 
 def _load_notification_policy(group_name: str | None = None) -> tuple[str, bool, str, str]:
@@ -72,21 +67,21 @@ def _load_notification_policy(group_name: str | None = None) -> tuple[str, bool,
     silence_end = ""
 
     if setting:
-        webhook = (setting.feishu_webhook or "").strip()
+        webhook = decrypt_secret(setting.feishu_webhook).strip()
         silence_enabled = bool(setting.silence_enabled)
         silence_start = setting.silence_start or ""
         silence_end = setting.silence_end or ""
 
     if policy:
         if policy.feishu_webhook and policy.feishu_webhook.strip():
-            webhook = policy.feishu_webhook.strip()
+            webhook = decrypt_secret(policy.feishu_webhook).strip()
         silence_enabled = bool(policy.silence_enabled)
         silence_start = policy.silence_start or ""
         silence_end = policy.silence_end or ""
 
     if webhook:
         return webhook, silence_enabled, silence_start, silence_end
-    return os.getenv(FEISHU_WEBHOOK_ENV, "").strip(), silence_enabled, silence_start, silence_end
+    return load_config().feishu_webhook.get_secret_value().strip(), silence_enabled, silence_start, silence_end
 
 
 def _resolve_feishu_webhook(group_name: str | None = None) -> str:
@@ -102,12 +97,20 @@ def _load_group_channels(group_name: str) -> tuple[bool, list[NotificationChanne
         channel_ids = [channel_id for (channel_id,) in routes]
         if not channel_ids:
             return False, []
-        channels = session.execute(
-            select(NotificationChannel)
-            .where(NotificationChannel.id.in_(channel_ids), NotificationChannel.enabled.is_(True))
-            .order_by(NotificationChannel.id.asc())
-        ).scalars().all()
-        return True, channels
+        channels = (
+            session.execute(
+                select(NotificationChannel)
+                .where(NotificationChannel.id.in_(channel_ids), NotificationChannel.enabled.is_(True))
+                .order_by(NotificationChannel.id.asc())
+            )
+            .scalars()
+            .all()
+        )
+        for channel in channels:
+            session.expunge(channel)
+            channel.endpoint = decrypt_secret(channel.endpoint)
+            channel.extra_config = decrypt_secret(channel.extra_config)
+        return True, list(channels)
 
 
 def _record_delivery(
@@ -166,6 +169,9 @@ async def send_feishu_card(
     status: str,
     event_time: datetime,
     group_name: str = "",
+    device_id: int | None = None,
+    duration_seconds: int = 0,
+    failure_reason: str = "",
 ) -> bool:
     webhook = _resolve_feishu_webhook(group_name)
     if not webhook:
@@ -176,6 +182,16 @@ async def send_feishu_card(
     status_text = "恢复上线" if is_recovery else "宕机离线"
     event_time_text = event_time.astimezone(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
+    details = (
+        f"\n**离线持续**: {duration_seconds} 秒"
+        if is_recovery and duration_seconds
+        else f"\n**失败原因**: {failure_reason}"
+        if failure_reason
+        else ""
+    )
+    link = _device_link(device_id)
+    if link:
+        details += f"\n**控制台**: {link}"
     payload = {
         "msg_type": "interactive",
         "card": {
@@ -190,7 +206,8 @@ async def send_feishu_card(
                         f"**设备名**: {device_name}\n"
                         f"**IP**: `{ip_address}`\n"
                         f"**状态**: **{status}**\n"
-                        f"**时间**: {event_time_text}"
+                        f"**分组**: {group_name}\n"
+                        f"**时间**: {event_time_text}{details}"
                     ),
                 }
             ],
@@ -203,13 +220,23 @@ async def send_feishu_card(
 def _event_markdown(event: AlertEvent) -> str:
     status_text = "恢复上线" if event.status.upper() == "ONLINE" else "宕机离线"
     event_time_text = event.event_time.astimezone(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    details = (
+        f"\n- 离线持续：{event.duration_seconds} 秒"
+        if event.status.upper() == "ONLINE" and event.duration_seconds
+        else f"\n- 失败原因：{event.failure_reason}"
+        if event.failure_reason
+        else ""
+    )
+    link = _device_link(event.device_id)
+    if link:
+        details += f"\n- 控制台：{link}"
     return (
         f"### NetSentinel 设备状态变更\n"
         f"- 分组：{event.group_name}\n"
         f"- 设备：{event.device_name}\n"
         f"- IP：`{event.ip_address}`\n"
         f"- 状态：**{status_text}**\n"
-        f"- 时间：{event_time_text}"
+        f"- 时间：{event_time_text}{details}"
     )
 
 
@@ -217,16 +244,27 @@ def _summary_markdown(events: list[AlertEvent], group_name: str) -> str:
     lines = []
     for event in events:
         status_text = "恢复" if event.status.upper() == "ONLINE" else "宕机"
-        lines.append(f"- {event.device_name} (`{event.ip_address}`): {status_text}")
+        detail = (
+            f"，离线 {event.duration_seconds} 秒"
+            if event.status.upper() == "ONLINE" and event.duration_seconds
+            else f"，原因：{event.failure_reason}"
+            if event.failure_reason
+            else ""
+        )
+        link = _device_link(event.device_id)
+        lines.append(
+            f"- {event.device_name} (`{event.ip_address}`): {status_text}{detail}"
+            + (f"，[控制台]({link})" if link else "")
+        )
     return (
         f"### NetSentinel 大面积网络波动\n"
         f"分组：{group_name}\n\n"
-        f"5 秒内检测到 **{len(events)}** 台设备状态变化。\n\n"
-        + "\n".join(lines)
+        f"5 秒内检测到 **{len(events)}** 台设备状态变化。\n\n" + "\n".join(lines)
     )
 
 
 async def _post_json(endpoint: str, payload: dict) -> DeliveryResult:
+    await asyncio.to_thread(validate_webhook_url, endpoint)
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.post(endpoint, json=payload)
     excerpt = response.text[:1000]
@@ -241,12 +279,13 @@ async def _post_json(endpoint: str, payload: dict) -> DeliveryResult:
 
 
 def _send_email_sync(channel: NotificationChannel, subject: str, body: str) -> DeliveryResult:
-    smtp_host = os.getenv("SMTP_HOST", "").strip()
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER", "").strip()
-    smtp_pass = os.getenv("SMTP_PASS", "").strip()
-    smtp_from = os.getenv("SMTP_FROM", smtp_user).strip()
-    smtp_tls = os.getenv("SMTP_TLS", "true").strip().lower() != "false"
+    config = load_config()
+    smtp_host = config.smtp_host.strip()
+    smtp_port = config.smtp_port
+    smtp_user = config.smtp_user.strip()
+    smtp_pass = config.smtp_pass.get_secret_value().strip()
+    smtp_from = (config.smtp_from or smtp_user).strip()
+    smtp_tls = config.smtp_tls
     recipients = [item.strip() for item in channel.endpoint.split(",") if item.strip()]
     if not smtp_host or not smtp_from or not recipients:
         return DeliveryResult(success=False, error="邮件渠道缺少 SMTP 配置或收件人")
@@ -299,7 +338,9 @@ async def _send_channel_payload(
             if not endpoint:
                 result = DeliveryResult(success=False, error="渠道端点为空")
             else:
-                result = await _post_json(endpoint, {"msgtype": "markdown", "markdown": {"title": title, "text": markdown}})
+                result = await _post_json(
+                    endpoint, {"msgtype": "markdown", "markdown": {"title": title, "text": markdown}}
+                )
         elif channel.channel_type == NotificationChannelType.WEBHOOK:
             if not endpoint:
                 result = DeliveryResult(success=False, error="渠道端点为空")
@@ -318,6 +359,42 @@ async def _send_channel_payload(
     return result.success
 
 
+async def send_system_alert(title: str, message: str) -> bool:
+    """Notify every enabled channel about a service fault, regardless of group routing."""
+    with SessionLocal() as session:
+        channels = (
+            session.execute(
+                select(NotificationChannel)
+                .where(NotificationChannel.enabled.is_(True))
+                .order_by(NotificationChannel.id)
+            )
+            .scalars()
+            .all()
+        )
+        for channel in channels:
+            session.expunge(channel)
+            channel.endpoint = decrypt_secret(channel.endpoint)
+            channel.extra_config = decrypt_secret(channel.extra_config)
+    if channels:
+        results = await asyncio.gather(
+            *(
+                _send_channel_payload(
+                    channel,
+                    title=title,
+                    markdown=message,
+                    raw={"kind": "SELF_MONITOR", "title": title, "message": message},
+                    event_kind="SELF_MONITOR",
+                    group_name="system",
+                )
+                for channel in channels
+            )
+        )
+        return any(results)
+    return await send_feishu_payload(
+        {"msg_type": "text", "content": {"text": f"{title}\n{message}"}}, bypass_silence=True
+    )
+
+
 async def send_test_notification(channel_id: int) -> bool:
     with SessionLocal() as session:
         channel = session.get(NotificationChannel, channel_id)
@@ -326,6 +403,8 @@ async def send_test_notification(channel_id: int) -> bool:
         if not channel.enabled:
             raise ValueError("Notification channel is disabled")
         session.expunge(channel)
+        channel.endpoint = decrypt_secret(channel.endpoint)
+        channel.extra_config = decrypt_secret(channel.extra_config)
 
     now_text = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
     title = "NetSentinel 测试通知"
@@ -434,7 +513,18 @@ async def _send_feishu_summary_card(events: list[AlertEvent], group_name: str) -
     lines: list[str] = []
     for event in events:
         status_text = "恢复" if event.status.upper() == "ONLINE" else "宕机"
-        lines.append(f"- {event.device_name} (`{event.ip_address}`): {status_text}")
+        detail = (
+            f"，离线 {event.duration_seconds} 秒"
+            if event.status.upper() == "ONLINE" and event.duration_seconds
+            else f"，原因：{event.failure_reason}"
+            if event.failure_reason
+            else ""
+        )
+        link = _device_link(event.device_id)
+        lines.append(
+            f"- {event.device_name} (`{event.ip_address}`): {status_text}{detail}"
+            + (f"，[控制台]({link})" if link else "")
+        )
 
     payload = {
         "msg_type": "interactive",
@@ -447,9 +537,7 @@ async def _send_feishu_summary_card(events: list[AlertEvent], group_name: str) -
                 {
                     "tag": "markdown",
                     "content": (
-                        f"5 秒内检测到 **{len(events)}** 台设备状态变化。\n\n"
-                        "### 变动设备列表\n"
-                        + "\n".join(lines)
+                        f"5 秒内检测到 **{len(events)}** 台设备状态变化。\n\n### 变动设备列表\n" + "\n".join(lines)
                     ),
                 }
             ],
@@ -467,6 +555,7 @@ async def send_feishu_payload(payload: dict, *, bypass_silence: bool = False, gr
         log_event(category="alert", message="当前处于告警静默窗口，飞书通知已抑制")
         return False
     try:
+        await asyncio.to_thread(validate_webhook_url, webhook)
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(webhook, json=payload)
         if response.status_code != 200:
@@ -483,49 +572,252 @@ async def send_feishu_payload(payload: dict, *, bypass_silence: bool = False, gr
         return False
 
 
-def _drain_alert_queue() -> list[AlertEvent]:
-    events: list[AlertEvent] = []
-    while True:
-        try:
-            events.append(_alert_queue.get_nowait())
-        except asyncio.QueueEmpty:
-            break
-    return events
+def _pending_outbox() -> list[AlertOutbox]:
+    with SessionLocal() as session:
+        return list(
+            session.execute(
+                select(AlertOutbox)
+                .where(
+                    AlertOutbox.delivery_status == "PENDING", AlertOutbox.next_attempt_at <= datetime.now(timezone.utc)
+                )
+                .order_by(AlertOutbox.id)
+                .limit(100)
+            )
+            .scalars()
+            .all()
+        )
+
+
+def _update_outbox(
+    outbox_id: int,
+    *,
+    status: str | None = None,
+    error: str = "",
+    channel_ids: list[int | str] | None = None,
+    delivered_id: int | str | None = None,
+    failed_attempt: bool = False,
+) -> None:
+    with SessionLocal() as session:
+        item = session.get(AlertOutbox, outbox_id)
+        if item is None:
+            return
+        if channel_ids is not None:
+            item.channel_ids = json.dumps(channel_ids)
+        if delivered_id is not None:
+            delivered = json.loads(item.delivered_channel_ids or "[]")
+            if delivered_id not in delivered:
+                delivered.append(delivered_id)
+            item.delivered_channel_ids = json.dumps(delivered)
+        if failed_attempt:
+            item.attempt_count += 1
+            if item.attempt_count >= 5:
+                item.delivery_status = "DEAD"
+            else:
+                item.next_attempt_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=min(300, 5 * 2 ** (item.attempt_count - 1))
+                )
+        if status is not None:
+            item.delivery_status = status
+        item.last_error = error[:1000]
+        session.commit()
+
+
+async def _dispatch_outbox_item(item: AlertOutbox) -> None:
+    event = AlertEvent(
+        item.device_name,
+        item.ip_address,
+        item.group_name,
+        item.status,
+        item.event_time,
+        item.device_id,
+        item.duration_seconds,
+        item.failure_reason,
+    )
+    if _is_in_silence_window(item.group_name):
+        await asyncio.to_thread(_update_outbox, item.id, status="SUPPRESSED")
+        return
+    if not item.channel_ids:
+        has_routes, channels = await asyncio.to_thread(_load_group_channels, item.group_name)
+        if has_routes:
+            targets: list[int | str] = [channel.id for channel in channels]
+        else:
+            targets = ["default"] if _resolve_feishu_webhook(item.group_name) else []
+        if not targets:
+            await asyncio.to_thread(_update_outbox, item.id, status="SKIPPED", error="No active notification channel")
+            return
+        await asyncio.to_thread(_update_outbox, item.id, channel_ids=targets)
+    else:
+        targets = json.loads(item.channel_ids)
+
+    delivered = set(json.loads(item.delivered_channel_ids or "[]"))
+    failed = False
+    for target in targets:
+        if target in delivered:
+            continue
+        if target == "default":
+            success = await send_feishu_card(
+                device_name=event.device_name,
+                ip_address=event.ip_address,
+                group_name=event.group_name,
+                status=event.status,
+                event_time=event.event_time,
+                device_id=event.device_id,
+                duration_seconds=event.duration_seconds,
+                failure_reason=event.failure_reason,
+            )
+        else:
+            with SessionLocal() as session:
+                channel = session.get(NotificationChannel, target)
+                if channel is not None:
+                    session.expunge(channel)
+                    channel.endpoint = decrypt_secret(channel.endpoint)
+                    channel.extra_config = decrypt_secret(channel.extra_config)
+            if channel is None or not channel.enabled:
+                await asyncio.to_thread(_update_outbox, item.id, delivered_id=target)
+                delivered.add(target)
+                continue
+            success = await _send_channel_payload(
+                channel,
+                title="NetSentinel 设备状态变更",
+                markdown=_event_markdown(event),
+                raw={
+                    "group_name": event.group_name,
+                    "device_name": event.device_name,
+                    "ip_address": event.ip_address,
+                    "status": event.status,
+                    "event_time": event.event_time.isoformat(),
+                },
+                event_kind="ALERT",
+                group_name=event.group_name,
+            )
+        if success:
+            await asyncio.to_thread(_update_outbox, item.id, delivered_id=target)
+            delivered.add(target)
+        else:
+            failed = True
+    if failed:
+        await asyncio.to_thread(_update_outbox, item.id, failed_attempt=True, error="One or more channels failed")
+    else:
+        await asyncio.to_thread(_update_outbox, item.id, status="SENT")
+
+
+async def _dispatch_outbox_summary(items: list[AlertOutbox]) -> None:
+    group_name = items[0].group_name
+    if _is_in_silence_window(group_name):
+        for item in items:
+            await asyncio.to_thread(_update_outbox, item.id, status="SUPPRESSED")
+        return
+    has_routes, channels = await asyncio.to_thread(_load_group_channels, group_name)
+    configured_targets: list[int | str] = (
+        [channel.id for channel in channels]
+        if has_routes
+        else (["default"] if _resolve_feishu_webhook(group_name) else [])
+    )
+    delivered = {item.id: set(json.loads(item.delivered_channel_ids or "[]")) for item in items}
+    targets_by_item: dict[int, list[int | str]] = {}
+    for item in items:
+        targets = json.loads(item.channel_ids) if item.channel_ids else configured_targets
+        if not targets:
+            await asyncio.to_thread(_update_outbox, item.id, status="SKIPPED", error="No active notification channel")
+            continue
+        targets_by_item[item.id] = targets
+        if not item.channel_ids:
+            await asyncio.to_thread(_update_outbox, item.id, channel_ids=targets)
+
+    all_targets = list(dict.fromkeys(target for targets in targets_by_item.values() for target in targets))
+    for target in all_targets:
+        waiting = [
+            item for item in items if target in targets_by_item.get(item.id, []) and target not in delivered[item.id]
+        ]
+        if not waiting:
+            continue
+        waiting_events = [
+            AlertEvent(
+                item.device_name,
+                item.ip_address,
+                item.group_name,
+                item.status,
+                item.event_time,
+                item.device_id,
+                item.duration_seconds,
+                item.failure_reason,
+            )
+            for item in waiting
+        ]
+        if target == "default":
+            success = await _send_feishu_summary_card(waiting_events, group_name)
+        else:
+            with SessionLocal() as session:
+                channel = session.get(NotificationChannel, target)
+                if channel is not None:
+                    session.expunge(channel)
+                    channel.endpoint = decrypt_secret(channel.endpoint)
+                    channel.extra_config = decrypt_secret(channel.extra_config)
+            if channel is None or not channel.enabled:
+                success = True
+            else:
+                success = await _send_channel_payload(
+                    channel,
+                    title="NetSentinel 大面积网络波动",
+                    markdown=_summary_markdown(waiting_events, group_name),
+                    raw={
+                        "group_name": group_name,
+                        "events": [
+                            {
+                                "device_name": event.device_name,
+                                "ip_address": event.ip_address,
+                                "status": event.status,
+                                "event_time": event.event_time.isoformat(),
+                            }
+                            for event in waiting_events
+                        ],
+                    },
+                    event_kind="SUMMARY",
+                    group_name=group_name,
+                )
+        if success:
+            for item in waiting:
+                await asyncio.to_thread(_update_outbox, item.id, delivered_id=target)
+                delivered[item.id].add(target)
+    for item in items:
+        targets = targets_by_item.get(item.id)
+        if targets is None:
+            continue
+        if all(target in delivered[item.id] for target in targets):
+            await asyncio.to_thread(_update_outbox, item.id, status="SENT")
+        else:
+            await asyncio.to_thread(
+                _update_outbox, item.id, failed_attempt=True, error="One or more summary channels failed"
+            )
+
+
+async def _dispatch_pending_batch() -> None:
+    events = await asyncio.to_thread(_pending_outbox)
+    by_group: dict[str, list[AlertOutbox]] = {}
+    for item in events:
+        if item.status == "OFFLINE":
+            by_group.setdefault(item.group_name, []).append(item)
+    grouped_ids: set[int] = set()
+    for group_events in by_group.values():
+        if len(group_events) >= load_config().alert_storm_threshold:
+            await _dispatch_outbox_summary(group_events)
+            grouped_ids.update(item.id for item in group_events)
+    for item in events:
+        if item.id not in grouped_ids:
+            await _dispatch_outbox_item(item)
 
 
 async def alert_dispatch_loop(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=ALERT_BATCH_INTERVAL_SECONDS)
+            await asyncio.wait_for(stop_event.wait(), timeout=load_config().alert_batch_interval_seconds)
         except asyncio.TimeoutError:
             pass
-
-        events = _drain_alert_queue()
-        if not events:
-            continue
-
-        if len(events) <= 2:
-            for event in events:
-                if _is_in_silence_window(event.group_name):
-                    log_event(
-                        category="alert",
-                        message=f"{event.group_name} 分组处于告警静默窗口，{event.device_name} 通知已抑制",
-                    )
-                    continue
-                await _send_event_to_configured_channels(event)
-        else:
-            sendable_events = []
-            for event in events:
-                if _is_in_silence_window(event.group_name):
-                    log_event(
-                        category="alert",
-                        message=f"{event.group_name} 分组处于告警静默窗口，{event.device_name} 通知已抑制",
-                    )
-                else:
-                    sendable_events.append(event)
-            if sendable_events:
-                grouped_events: dict[str, list[AlertEvent]] = {}
-                for event in sendable_events:
-                    grouped_events.setdefault(event.group_name, []).append(event)
-                for group_name, group_events in grouped_events.items():
-                    await _send_summary_to_configured_channels(group_name, group_events)
+        if stop_event.is_set():
+            break
+        try:
+            await _dispatch_pending_batch()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("alert dispatch failed; retrying")

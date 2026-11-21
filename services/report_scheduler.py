@@ -82,6 +82,7 @@ def schedule_weekly_report_job(scheduler: AsyncIOScheduler) -> None:
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=3600,
     )
     log_event(
         category="report",
